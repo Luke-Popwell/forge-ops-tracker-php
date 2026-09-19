@@ -3,7 +3,7 @@
 declare(strict_types=1);
 
 /**
- * Same purpose as fixtures/echo_server.php, on a separate port -- used by
+ * Same purpose as fixtures/echo_server.php, on a separate port: used by
  * ForgeOpsTrackerTest specifically, kept as its own instance so the two
  * test classes' local servers never collide.
  */

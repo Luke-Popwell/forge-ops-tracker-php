@@ -61,7 +61,7 @@ final class DeliveryQueueTest extends TestCase
         $queue = new DeliveryQueue($this->configuration(queueSize: 10), $client);
         $queue->push(['n' => 1]);
         $queue->flush();
-        $queue->flush(); // nothing left queued -- must not redeliver
+        $queue->flush(); // nothing left queued: must not redeliver
 
         self::assertSame(1, $callCount);
     }

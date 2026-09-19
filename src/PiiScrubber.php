@@ -6,12 +6,12 @@ namespace ForgeOps\Tracker;
 
 /**
  * Redacts likely-sensitive content out of a payload before it ever leaves
- * this process -- the same patterns ForgeOps itself applies again on
+ * this process: the same patterns ForgeOps itself applies again on
  * arrival (defense in depth: this layer keeps the data off the wire and
  * out of any request logging in between; the server-side layer is what
  * actually protects the database, and doesn't depend on every reporting
  * app running an up-to-date version of this client). Ported from
- * gems/forge_ops_tracker/lib/forge_ops_tracker/pii_scrubber.rb -- kept
+ * gems/forge_ops_tracker/lib/forge_ops_tracker/pii_scrubber.rb: kept
  * standalone and dependency-free here for the same reason as the Ruby
  * original: this has to work in any host app regardless of what's
  * reporting into it.

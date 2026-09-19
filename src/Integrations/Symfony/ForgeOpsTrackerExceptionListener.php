@@ -26,7 +26,7 @@ final class ForgeOpsTrackerExceptionListener implements EventSubscriberInterface
         $throwable = $event->getThrowable();
         $request = $event->getRequest();
 
-        // Reports, then leaves the event untouched -- doesn't call
+        // Reports, then leaves the event untouched: doesn't call
         // setThrowable()/setResponse(), so Symfony's own exception
         // handling continues exactly as if this listener weren't
         // registered. Only fires for an exception that actually escaped

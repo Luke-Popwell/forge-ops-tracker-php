@@ -17,7 +17,7 @@ use RuntimeException;
  * as SymfonyIntegrationTest), injected *after* the app has booted (so the
  * service provider's own boot()-time registration of the reportable()
  * callback is unaffected) but *before* the exception handler's report()
- * is actually invoked -- ForgeOpsTracker::captureException() only
+ * is actually invoked: ForgeOpsTracker::captureException() only
  * resolves the reporter lazily, at the point it's actually called, not
  * at registration time.
  */
@@ -46,7 +46,7 @@ final class LaravelIntegrationTest extends TestCase
         );
 
         ForgeOpsTracker::init(dsn: 'https://key@tracker.example.com/api/v1/events');
-        // No setAccessible(true) -- deprecated as of PHP 8.5, no effect
+        // No setAccessible(true): deprecated as of PHP 8.5, no effect
         // since PHP 8.1 (verified directly, not assumed).
         $property = new ReflectionProperty(ForgeOpsTracker::class, 'reporter');
         $property->setValue(null, $reporter);
@@ -55,7 +55,7 @@ final class LaravelIntegrationTest extends TestCase
         $throwable = new RuntimeException('boom');
 
         // report() is the same method Laravel's own exception-handling
-        // pipeline calls for a real unhandled exception -- invoking it
+        // pipeline calls for a real unhandled exception: invoking it
         // directly is the standard way to exercise a registered
         // reportable() callback in a test, without needing a full HTTP
         // request/response cycle.

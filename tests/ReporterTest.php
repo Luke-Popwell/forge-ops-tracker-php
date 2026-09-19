@@ -31,12 +31,26 @@ final class ReporterTest extends TestCase
         $context = ['a' => 1];
 
         $eventBuilder = $this->createMock(EventBuilder::class);
-        $eventBuilder->expects(self::once())->method('build')->with($error, $context)->willReturn($builtPayload);
+        $eventBuilder->expects(self::once())->method('build')->with($error, $context, null)->willReturn($builtPayload);
 
         $deliveryQueue = $this->createMock(DeliveryQueue::class);
         $deliveryQueue->expects(self::once())->method('push')->with($builtPayload);
 
         (new Reporter($configuration, $eventBuilder, $deliveryQueue))->report($error, $context);
+    }
+
+    public function testPassesTheUserThroughToTheEventBuilder(): void
+    {
+        $configuration = $this->enabledConfiguration();
+        $error = new RuntimeException('boom');
+        $user = ['id' => 42, 'email' => 'alice@example.com'];
+
+        $eventBuilder = $this->createMock(EventBuilder::class);
+        $eventBuilder->expects(self::once())->method('build')->with($error, [], $user)->willReturn([]);
+
+        $deliveryQueue = $this->createMock(DeliveryQueue::class);
+
+        (new Reporter($configuration, $eventBuilder, $deliveryQueue))->report($error, user: $user);
     }
 
     public function testDoesNothingWhenReportingIsDisabled(): void

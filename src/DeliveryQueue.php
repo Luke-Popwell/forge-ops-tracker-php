@@ -8,7 +8,7 @@ namespace ForgeOps\Tracker;
  * Defers delivery until after the response has already been sent to the
  * visiting user, so a broken or slow tracker never adds latency they'd
  * notice. This is deliberately *not* a background thread + bounded queue
- * the way the Ruby/.NET/Python clients' DeliveryQueue is -- a typical PHP
+ * the way the Ruby/.NET/Python clients' DeliveryQueue is: a typical PHP
  * request (PHP-FPM or similar) is single-threaded and shared-nothing
  * between requests, so there's no persistent worker to start in the
  * first place. Named the same as the other clients' equivalent class for
@@ -17,7 +17,7 @@ namespace ForgeOps\Tracker;
  * Uses register_shutdown_function() + fastcgi_finish_request() (when
  * available) instead: the shutdown callback runs after the script would
  * otherwise have ended, and fastcgi_finish_request() flushes the
- * response to the client first, under PHP-FPM specifically -- so the
+ * response to the client first, under PHP-FPM specifically: so the
  * actual HTTP call(s) to ForgeOps happen after the user's connection has
  * already been served. This is the standard, idiomatic substitute real
  * PHP error trackers use for the same problem. Outside FPM (plain CLI,

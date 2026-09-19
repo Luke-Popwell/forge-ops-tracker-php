@@ -18,8 +18,8 @@ use Symfony\Component\HttpKernel\KernelEvents;
 
 /**
  * Wiring is verified against a substituted mock Reporter (via Reflection
- * into ForgeOpsTracker's private static property), not real HTTP delivery
- * -- Client/DeliveryQueue/Reporter's own actual delivery behavior is
+ * into ForgeOpsTracker's private static property), not real HTTP delivery:
+ * Client/DeliveryQueue/Reporter's own actual delivery behavior is
  * already covered elsewhere; what's specific to this integration is
  * whether the Symfony event wiring itself is correct.
  */
@@ -57,7 +57,7 @@ final class SymfonyIntegrationTest extends TestCase
         self::assertSame($throwable, $reportedThrowable);
         self::assertSame('/throw', $reportedContext['path']);
         self::assertSame('GET', $reportedContext['method']);
-        // The listener never calls setThrowable()/setResponse() -- confirms
+        // The listener never calls setThrowable()/setResponse(): confirms
         // it only observes; Symfony's own exception handling behaves
         // exactly as if this listener weren't registered.
         self::assertSame($throwable, $event->getThrowable());
@@ -67,7 +67,7 @@ final class SymfonyIntegrationTest extends TestCase
     private function injectReporter(Reporter $reporter): void
     {
         ForgeOpsTracker::init(dsn: 'https://key@tracker.example.com/api/v1/events');
-        // No setAccessible(true) -- deprecated as of PHP 8.5, no effect
+        // No setAccessible(true): deprecated as of PHP 8.5, no effect
         // since PHP 8.1 (verified directly, not assumed).
         $property = new ReflectionProperty(ForgeOpsTracker::class, 'reporter');
         $property->setValue(null, $reporter);

@@ -17,19 +17,28 @@ class EventBuilder
 
     // How many lines of source to grab on either side of the culprit line
     // (see attachSourceContext()), and the longest a single captured line
-    // is allowed to be before getting truncated -- guards against a single
+    // is allowed to be before getting truncated: guards against a single
     // pathological minified/generated line ballooning the payload. ForgeOps
     // itself re-truncates on arrival too, the same "don't just trust the
     // client" posture MAX_FRAMES already gets on the server side.
     private const CONTEXT_LINES = 5;
     private const MAX_CONTEXT_LINE_LENGTH = 500;
 
+    // Identifies this client to the server's auto language-detection on the project the event
+    // lands in (see Project#note_sdk_platform server-side); matches this repo's own sdks/php
+    // directory name, the same convention every other language's client follows.
+    private const SDK_NAME = 'php';
+
     public function __construct(private Configuration $configuration)
     {
     }
 
-    /** @param array<string, mixed> $context */
-    public function build(Throwable $throwable, array $context = []): array
+    /**
+     * @param array<string, mixed> $context
+     * @param array<string, mixed>|null $user
+     * @param array<int, array<string, mixed>> $breadcrumbs
+     */
+    public function build(Throwable $throwable, array $context = [], ?array $user = null, array $breadcrumbs = []): array
     {
         $payload = [
             'exception_class' => get_class($throwable),
@@ -41,15 +50,26 @@ class EventBuilder
             'server_name' => $this->configuration->serverName,
             'context' => $context,
             'tags' => [],
+            'sdk_name' => self::SDK_NAME,
         ];
+        if ($user !== null && $user !== []) {
+            $payload['user'] = $user;
+        }
+        if ($breadcrumbs !== []) {
+            $payload['breadcrumbs'] = $breadcrumbs;
+        }
 
         return $this->configuration->scrubPii ? $this->scrub($payload) : $payload;
     }
 
-    // exception_class/occurred_at/environment/release/server_name are
-    // left alone -- structured fields this client or the host app sets
-    // deliberately, not free text an exception or its context could
-    // accidentally spill sensitive data into.
+    // exception_class/occurred_at/environment/release/server_name/sdk_name/user are left
+    // alone: structured fields this client or the host app sets deliberately, not free text an
+    // exception or its context could accidentally spill sensitive data into. user specifically
+    // is a deliberate exemption, not an oversight: PiiScrubber's own email pattern would
+    // otherwise redact the exact thing this field exists to carry. breadcrumbs is *not* exempt,
+    // unlike user: query/request-lifecycle trail entries are exactly the kind of free text (a
+    // query's bind params showing up in a message, a URL with a token in it) the scrubber exists
+    // to catch, matching gems/forge_ops_tracker's own event_builder.rb treatment of this field.
     private function scrub(array $payload): array
     {
         $payload['message'] = PiiScrubber::scrubString($payload['message']);
@@ -67,6 +87,9 @@ class EventBuilder
         }, $payload['backtrace']);
         $payload['context'] = PiiScrubber::scrub($payload['context']);
         $payload['tags'] = PiiScrubber::scrub($payload['tags']);
+        if (array_key_exists('breadcrumbs', $payload)) {
+            $payload['breadcrumbs'] = PiiScrubber::scrub($payload['breadcrumbs']);
+        }
 
         return $payload;
     }
@@ -79,7 +102,7 @@ class EventBuilder
 
         // PHP's own trace format is call-site-shifted: trace[i]'s
         // file/line is *where trace[i]'s function was called from*, not
-        // where that function itself executes -- verified directly
+        // where that function itself executes: verified directly
         // against a real nested-function throw, not assumed (see the
         // README's note on this). Building a frame list where each
         // entry's file/line actually matches its own method name means
@@ -130,7 +153,7 @@ class EventBuilder
      * Reads a few lines of source straight off disk around the culprit
      * line, at throw-time, in the same running process the exception came
      * from. Gated on two things: the frame has to be in-app (never a
-     * vendored dependency -- there'd be nothing meaningful to show, and
+     * vendored dependency: there'd be nothing meaningful to show, and
      * it's not the host app's own code to begin with), and
      * Configuration::$captureSourceContext has to be true (see Configuration
      * for why it defaults to true, and why ForgeOps' own per-project

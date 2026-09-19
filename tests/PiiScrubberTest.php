@@ -31,7 +31,7 @@ final class PiiScrubberTest extends TestCase
 
     public function testRedactsKnownApiKeyAndTokenFormats(): void
     {
-        // Built from two concatenated pieces, not one contiguous literal -- Stripe's own public
+        // Built from two concatenated pieces, not one contiguous literal: Stripe's own public
         // documentation example key (github.com secret scanning flags the shape regardless of
         // context, so a plain literal here trips push protection even though this was never a
         // real credential).

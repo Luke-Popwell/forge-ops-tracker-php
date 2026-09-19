@@ -79,4 +79,46 @@ final class ConfigurationTest extends TestCase
 
         self::assertFalse($config->isEnabled());
     }
+
+    public function testTrackSessionsDefaultsToTrue(): void
+    {
+        self::assertTrue((new Configuration())->trackSessions);
+    }
+
+    public function testSessionCheckinsUriSwapsEventsForSessionCheckins(): void
+    {
+        $config = $this->configuration();
+        $config->dsn = 'https://secret-key@tracker.example.com/api/v1/events';
+
+        self::assertSame('https://tracker.example.com/api/v1/session_checkins', $config->sessionCheckinsUri());
+    }
+
+    public function testSessionCheckinsUriIsNullWithNoDsn(): void
+    {
+        $config = $this->configuration();
+        $config->dsn = null;
+
+        self::assertNull($config->sessionCheckinsUri());
+    }
+
+    public function testTrackPerformanceDefaultsToTrue(): void
+    {
+        self::assertTrue((new Configuration())->trackPerformance);
+    }
+
+    public function testPerformanceSamplesUriSwapsEventsForPerformanceSamples(): void
+    {
+        $config = $this->configuration();
+        $config->dsn = 'https://secret-key@tracker.example.com/api/v1/events';
+
+        self::assertSame('https://tracker.example.com/api/v1/performance_samples', $config->performanceSamplesUri());
+    }
+
+    public function testPerformanceSamplesUriIsNullWithNoDsn(): void
+    {
+        $config = $this->configuration();
+        $config->dsn = null;
+
+        self::assertNull($config->performanceSamplesUri());
+    }
 }

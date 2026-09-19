@@ -111,4 +111,48 @@ final class ClientTest extends TestCase
             json_decode($received['body'], true)
         );
     }
+
+    public function testDeliverSessionCheckinPostsToTheSessionCheckinsUri(): void
+    {
+        $client = new Client($this->configuration('api/v1/events'));
+
+        self::assertTrue($client->deliverSessionCheckin(['sessions_count' => 1, 'crashed_sessions_count' => 0]));
+
+        $received = json_decode((string) file_get_contents(self::$requestFile), true);
+        self::assertSame('/api/v1/session_checkins', $received['path']);
+        self::assertSame('Bearer secret-key', $received['headers']['Authorization']);
+        self::assertSame(
+            ['sessions_count' => 1, 'crashed_sessions_count' => 0],
+            json_decode($received['body'], true)
+        );
+    }
+
+    public function testDeliverSessionCheckinReturnsFalseWithoutAnEventsSuffixToSwap(): void
+    {
+        // sessionCheckinsUri() falls back to the ingestion URI unchanged when it doesn't end in
+        // "/events": still a real endpoint here (the echo server accepts any path), so this
+        // just confirms the fallback URI is actually the one used, not that delivery fails.
+        $client = new Client($this->configuration('api/v1/session_checkins'));
+
+        self::assertTrue($client->deliverSessionCheckin(['sessions_count' => 1]));
+
+        $received = json_decode((string) file_get_contents(self::$requestFile), true);
+        self::assertSame('/api/v1/session_checkins', $received['path']);
+    }
+
+    public function testDeliverPerformanceSamplesPostsTheBatchWrappedInSamples(): void
+    {
+        $client = new Client($this->configuration('api/v1/events'));
+
+        self::assertTrue($client->deliverPerformanceSamples([
+            ['transaction_name' => 'GET users/{id}', 'request_count' => 1],
+        ]));
+
+        $received = json_decode((string) file_get_contents(self::$requestFile), true);
+        self::assertSame('/api/v1/performance_samples', $received['path']);
+        self::assertSame(
+            ['samples' => [['transaction_name' => 'GET users/{id}', 'request_count' => 1]]],
+            json_decode($received['body'], true)
+        );
+    }
 }

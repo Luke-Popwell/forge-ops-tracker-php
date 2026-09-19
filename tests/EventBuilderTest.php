@@ -44,6 +44,7 @@ final class EventBuilderTest extends TestCase
         self::assertSame('web-1', $payload['server_name']);
         self::assertSame(['url' => 'https://example.com'], $payload['context']);
         self::assertMatchesRegularExpression('/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $payload['occurred_at']);
+        self::assertSame('php', $payload['sdk_name']);
     }
 
     public function testParsesRealStackFramesWithFileLineAndMethod(): void
@@ -54,7 +55,7 @@ final class EventBuilderTest extends TestCase
         $frames = $builder->build($error)['backtrace'];
 
         self::assertNotEmpty($frames);
-        // The innermost frame's file/line is the throwable's own -- where
+        // The innermost frame's file/line is the throwable's own: where
         // the `throw` statement itself executed (this file), paired with
         // the *next* trace entry's function name (raiseAndCapture), per
         // PHP's call-site-shifted trace format verified directly against
@@ -90,7 +91,7 @@ final class EventBuilderTest extends TestCase
     {
         // Unlike the Ruby/.NET/Python clients, PHP's Exception captures
         // its backtrace at *construction* time (verified directly, not
-        // assumed) -- so there's no equivalent "empty backtrace when
+        // assumed): so there's no equivalent "empty backtrace when
         // never thrown" case to test here; a constructed-but-unthrown
         // exception still has a real, non-empty trace.
         $builder = new EventBuilder($this->configuration());
@@ -119,6 +120,90 @@ final class EventBuilderTest extends TestCase
         );
     }
 
+    public function testIncludesTheUserWhenGivenOneNeverScrubbedEvenThoughItsAnEmail(): void
+    {
+        $builder = new EventBuilder($this->configuration());
+        try {
+            throw new RuntimeException('boom');
+        } catch (RuntimeException $error) {
+            $payload = $builder->build($error, user: ['id' => 42, 'email' => 'ada@example.com']);
+        }
+
+        self::assertSame(['id' => 42, 'email' => 'ada@example.com'], $payload['user']);
+    }
+
+    public function testOmitsTheUserKeyEntirelyWhenNoneWasGiven(): void
+    {
+        $builder = new EventBuilder($this->configuration());
+        try {
+            throw new RuntimeException('boom');
+        } catch (RuntimeException $error) {
+            $payload = $builder->build($error);
+        }
+
+        self::assertArrayNotHasKey('user', $payload);
+    }
+
+    public function testIncludesBreadcrumbsWhenGivenAny(): void
+    {
+        $builder = new EventBuilder($this->configuration());
+        $breadcrumbs = [
+            ['category' => 'query', 'message' => 'SELECT users', 'level' => 'info', 'timestamp' => '2026-01-01T00:00:00Z', 'data' => ['duration_ms' => 1.2]],
+        ];
+        try {
+            throw new RuntimeException('boom');
+        } catch (RuntimeException $error) {
+            $payload = $builder->build($error, breadcrumbs: $breadcrumbs);
+        }
+
+        self::assertSame($breadcrumbs, $payload['breadcrumbs']);
+    }
+
+    public function testOmitsTheBreadcrumbsKeyEntirelyWhenNoneWereGiven(): void
+    {
+        $builder = new EventBuilder($this->configuration());
+        try {
+            throw new RuntimeException('boom');
+        } catch (RuntimeException $error) {
+            $payload = $builder->build($error);
+        }
+
+        self::assertArrayNotHasKey('breadcrumbs', $payload);
+    }
+
+    public function testScrubsLikelyPiiOutOfBreadcrumbMessagesAndDataByDefault(): void
+    {
+        $builder = new EventBuilder($this->configuration());
+        $breadcrumbs = [
+            ['category' => 'custom', 'message' => 'charged user@example.com', 'level' => 'info', 'timestamp' => '2026-01-01T00:00:00Z', 'data' => ['token' => 'sekret']],
+        ];
+        try {
+            throw new RuntimeException('boom');
+        } catch (RuntimeException $error) {
+            $payload = $builder->build($error, breadcrumbs: $breadcrumbs);
+        }
+
+        self::assertSame('charged [EMAIL FILTERED]', $payload['breadcrumbs'][0]['message']);
+        self::assertSame('[FILTERED]', $payload['breadcrumbs'][0]['data']['token']);
+    }
+
+    public function testLeavesBreadcrumbsUntouchedWhenScrubPiiIsDisabled(): void
+    {
+        $config = $this->configuration();
+        $config->scrubPii = false;
+        $builder = new EventBuilder($config);
+        $breadcrumbs = [
+            ['category' => 'custom', 'message' => 'charged user@example.com', 'level' => 'info', 'timestamp' => '2026-01-01T00:00:00Z', 'data' => []],
+        ];
+        try {
+            throw new RuntimeException('boom');
+        } catch (RuntimeException $error) {
+            $payload = $builder->build($error, breadcrumbs: $breadcrumbs);
+        }
+
+        self::assertSame('charged user@example.com', $payload['breadcrumbs'][0]['message']);
+    }
+
     public function testLeavesThePayloadUntouchedWhenScrubPiiIsDisabled(): void
     {
         $config = $this->configuration();
@@ -139,7 +224,7 @@ final class EventBuilderTest extends TestCase
     /**
      * Writes a small, real, requirable PHP fixture file where line
      * $throwAtLine is a `throw` statement and every other line is an inert
-     * comment -- so requiring it produces a real Throwable whose
+     * comment: so requiring it produces a real Throwable whose
      * getFile()/getLine() point at that exact line, with real, known
      * content surrounding it to assert against.
      *

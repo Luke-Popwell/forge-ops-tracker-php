@@ -28,7 +28,7 @@ final class ForgeOpsTrackerServiceProvider extends ServiceProvider
         }
 
         // Reports, then lets Laravel's own reporting continue exactly as
-        // if this provider weren't registered -- a reportable() callback
+        // if this provider weren't registered: a reportable() callback
         // only stops the normal report() flow if it explicitly returns
         // false, which this never does. Only fires for an exception that
         // actually reaches the exception handler; anything your own code
