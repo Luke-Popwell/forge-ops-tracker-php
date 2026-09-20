@@ -1,6 +1,6 @@
 # forge-ops/tracker
 
-PHP error reporting client for a [ForgeOps](../../) instance.
+PHP error reporting client for [ForgeOps](https://getforgeops.net).
 Requires PHP 8.1+. Captures uncaught exceptions automatically through framework integrations for
 Laravel and Symfony, or a plain exception-handler wrapper outside a framework, lets you report
 caught exceptions explicitly, and scrubs likely personal data before anything leaves the process.
