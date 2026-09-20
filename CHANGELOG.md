@@ -5,6 +5,14 @@ This package has no tagged releases yet (see the README's own "Installation" sec
 CHANGELOG's own starting point, the same "first tracked version, not a real bump from anything"
 situation `sdks/dart`'s own `0.1.0` entry documents for an identical reason.
 
+## 0.2.0
+
+- Performance percentiles: every performance sample now carries a small latency histogram alongside
+  its count/sum/max (fixed buckets of 50, 100, 250, 500, 1000, 2500, 5000 and 10000ms, plus an
+  overflow bucket), so ForgeOps can show an approximate p50/p95/p99 per transaction instead of
+  only an average. No new config; this rides the existing performance tracking flag and flush
+  interval.
+
 ## 0.1.0
 
 - Custom metrics and infrastructure monitoring: `ForgeOpsTracker::captureMetric($name, $value = 1.0)`

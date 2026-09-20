@@ -295,6 +295,11 @@ actually slow, not just which ones raise. Reported as `"<HTTP method> <route pat
 `"GET users/{id}"` for Laravel, `"GET user_detail"` for Symfony's own route name), not the raw
 path, so a distinct user id doesn't explode into its own separate transaction.
 
+Each sample also carries a one-bucket latency histogram (which of the fixed latency buckets the
+duration fell into: 50, 100, 250, 500, 1000, 2500, 5000 or 10000ms, or an overflow bucket), and
+ForgeOps merges these across requests, so it can show an approximate p50/p95/p99 per transaction,
+not just an average. Percentiles are accurate to the width of whichever bucket a duration falls into.
+
 ```php
 ForgeOpsTracker::init(
     dsn: '...',

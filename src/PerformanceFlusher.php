@@ -47,6 +47,10 @@ class PerformanceFlusher
             'request_count' => 1,
             'duration_sum_ms' => $durationMs,
             'max_duration_ms' => $durationMs,
+            // One occurrence, so exactly one bucket with a count of 1 (see HistogramBucketer).
+            // PHP turns the numeric-string label into an int array key, which json_encode still
+            // writes back out as an object key ("50"), never a list, since a real label is never 0.
+            'histogram' => [HistogramBucketer::bucketFor($durationMs) => 1],
         ];
 
         $this->ensureShutdownHandlerRegistered();

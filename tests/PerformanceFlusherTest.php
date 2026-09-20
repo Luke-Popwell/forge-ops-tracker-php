@@ -108,4 +108,25 @@ final class PerformanceFlusherTest extends TestCase
         $flusher->record('GET users/{id}', 42.5);
         $flusher->flush();
     }
+
+    public function testDeliversAOneBucketLatencyHistogramWithEachSample(): void
+    {
+        $delivered = [];
+        $client = $this->createMock(Client::class);
+        $client->method('deliverPerformanceSamples')->willReturnCallback(function (array $samples) use (&$delivered): bool {
+            $delivered = $samples;
+
+            return true;
+        });
+
+        $flusher = new PerformanceFlusher($this->configuration(), $client);
+        $flusher->record('GET slow', 700.0);
+        $flusher->record('GET very-slow', 12000.0, 'controller');
+        $flusher->flush();
+
+        // JSON is what actually goes over the wire, so assert on that, not just the PHP array:
+        // a numeric-string key must still come out as an object key, never a JSON list.
+        self::assertSame('{"1000":1}', json_encode($delivered[0]['histogram']));
+        self::assertSame('{"inf":1}', json_encode($delivered[1]['histogram']));
+    }
 }
