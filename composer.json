@@ -1,6 +1,6 @@
 {
     "name": "forge-ops/tracker",
-    "description": "ForgeOps error tracking client: captures unhandled exceptions (Laravel/Symfony integration, plus explicit capture anywhere else) and delivers them to a ForgeOps instance over HTTP.",
+    "description": "ForgeOps error tracking client: captures unhandled exceptions (Laravel/Symfony integration, plus explicit capture anywhere else) and delivers them to ForgeOps over HTTP.",
     "type": "library",
     "license": "MIT",
     "require": {

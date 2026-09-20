@@ -9,7 +9,7 @@ use Throwable;
 /**
  * Public entry point:
  *
- *     ForgeOpsTracker::init(dsn: "https://<api_key>@your-forgeops-host/api/v1/events");
+ *     ForgeOpsTracker::init(dsn: "https://<api_key>@getforgeops.net/api/v1/events");
  *
  * See the README for Laravel/Symfony integration and what gets captured
  * automatically vs. what needs an explicit captureException() call.

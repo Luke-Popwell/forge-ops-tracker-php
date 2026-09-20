@@ -23,7 +23,7 @@ variable or explicitly:
 use ForgeOps\Tracker\ForgeOpsTracker;
 
 ForgeOpsTracker::init(
-    dsn: 'https://<api_key>@your-forgeops-host/api/v1/events', // or leave unset to read FORGE_OPS_DSN
+    dsn: 'https://<api_key>@getforgeops.net/api/v1/events', // or leave unset to read FORGE_OPS_DSN
     release: '...',
     environment: 'production',
 );
