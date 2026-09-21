@@ -58,8 +58,34 @@ class EventBuilder
         if ($breadcrumbs !== []) {
             $payload['breadcrumbs'] = $breadcrumbs;
         }
+        $payload = $this->attachSql($payload, $throwable);
 
         return $this->configuration->scrubPii ? $this->scrub($payload) : $payload;
+    }
+
+    // See SqlStatement for what's read off the error and how it's masked. The statement itself only
+    // goes out when captureSqlStatement is on; the extracted names go out on their own
+    // (captureSqlObjects) so an issue can still name the procedure or view involved.
+    private function attachSql(array $payload, Throwable $throwable): array
+    {
+        if (!$this->configuration->captureSqlObjects && !$this->configuration->captureSqlStatement) {
+            return $payload;
+        }
+
+        $masked = SqlStatement::mask(SqlStatement::findIn($throwable));
+        if ($masked === null) {
+            return $payload;
+        }
+
+        $objects = SqlStatement::objects($masked);
+        if ($objects !== null && $this->configuration->captureSqlObjects) {
+            $payload['sql_objects'] = $objects;
+        }
+        if ($this->configuration->captureSqlStatement) {
+            $payload['sql_statement'] = $masked;
+        }
+
+        return $payload;
     }
 
     // exception_class/occurred_at/environment/release/server_name/sdk_name/user are left
@@ -87,6 +113,9 @@ class EventBuilder
         }, $payload['backtrace']);
         $payload['context'] = PiiScrubber::scrub($payload['context']);
         $payload['tags'] = PiiScrubber::scrub($payload['tags']);
+        if (isset($payload['sql_statement'])) {
+            $payload['sql_statement'] = PiiScrubber::scrubString($payload['sql_statement']);
+        }
         if (array_key_exists('breadcrumbs', $payload)) {
             $payload['breadcrumbs'] = PiiScrubber::scrub($payload['breadcrumbs']);
         }

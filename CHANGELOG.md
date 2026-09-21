@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- Database errors now say where to look. When an error carries the SQL behind a failed database call (Laravel's `QueryException::getSql()`, Doctrine DBAL's `DriverException::getQuery()`, or anything they wrap), the event carries the names of the stored procedure, table and view that SQL touched. On by default (`captureSqlObjects`); names are identifiers, never values. New opt-in `captureSqlStatement` (default false) also sends the statement itself, with every string and number replaced by `?`. Each project has its own server-side setting that can stop the statement being stored regardless of this flag; the names are still kept.
+
 This package has no tagged releases yet (see the README's own "Installation" section: install
 `dev-main`), so there is no prior version this first entry follows; `0.1.0` below is simply this
 CHANGELOG's own starting point, the same "first tracked version, not a real bump from anything"

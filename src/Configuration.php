@@ -51,6 +51,20 @@ final class Configuration
     public bool $captureSourceContext = true;
 
     /**
+     * When an error comes from a database call (Laravel's QueryException, Doctrine DBAL's
+     * DriverException, and anything that wraps one), send the names of the stored procedure,
+     * table and view its SQL touched, so an issue says where to start looking. Names are
+     * identifiers, never values, which is why this defaults on. $captureSqlStatement is the
+     * separate, opt-in step of also sending the statement itself, with every string and number
+     * replaced by "?"; off by default because even a masked statement describes your schema, and
+     * ForgeOps' own per-project setting is what durably governs whether the server stores it. See
+     * SqlStatement.
+     */
+    public bool $captureSqlObjects = true;
+
+    public bool $captureSqlStatement = false;
+
+    /**
      * Whether every request through a framework integration also counts as a session (crash-free
      * unless an unhandled exception, or a 5xx response, actually affects it), reported to give
      * ForgeOps a crash-free rate per release. On by default, the same "on unless you turn it off"

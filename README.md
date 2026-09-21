@@ -400,6 +400,25 @@ worker would otherwise grow it without bound. A NaN or infinite value is dropped
 `json_encode` fails on one, which would make the whole batch fail to send. Requires a ForgeOps plan
 that includes custom metrics / infrastructure monitoring.
 
+## Database errors
+
+When an error comes from a database call, the event includes the names of the stored procedure, table and view its SQL touched, so the issue tells you where to start looking. This is on by default and sends identifiers only, never values. The statement is read from `getSql()` on Laravel's `QueryException`, or from Doctrine DBAL's `DriverException::getQuery()`, on the exception or anything it wraps (`getPrevious()`). A raw `PDOException` carries none.
+
+To also send the SQL statement itself, opt in. Every string and number is replaced by `?` before it
+leaves your process (`WHERE email = 'a@b.co' AND id = 42` is sent as `WHERE email = ? AND id = ?`),
+and ForgeOps masks it again on arrival:
+
+```php
+// Opt in to also sending the masked statement (default false).
+ForgeOpsTracker::init(dsn: '...', captureSqlStatement: true);
+// captureSqlObjects: false stops even the names (default true)
+```
+
+Each ForgeOps project also has its own "Capture the SQL behind database errors" setting. Turn it off
+there and the statement is never stored for that project, whatever this flag says; the names are
+still kept. A view and a table are written the same way in SQL, so both show as tables/views; the
+database's own error message usually settles which it was.
+
 ## Running the tests
 
 ```bash

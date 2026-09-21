@@ -62,6 +62,8 @@ final class ForgeOpsTracker
         ?float $timeout = null,
         ?bool $scrubPii = null,
         ?bool $captureSourceContext = null,
+        ?bool $captureSqlObjects = null,
+        ?bool $captureSqlStatement = null,
         ?bool $trackSessions = null,
         ?bool $trackPerformance = null,
         ?bool $trackBreadcrumbs = null,
@@ -102,6 +104,12 @@ final class ForgeOpsTracker
         }
         if ($captureSourceContext !== null) {
             $configuration->captureSourceContext = $captureSourceContext;
+        }
+        if ($captureSqlObjects !== null) {
+            $configuration->captureSqlObjects = $captureSqlObjects;
+        }
+        if ($captureSqlStatement !== null) {
+            $configuration->captureSqlStatement = $captureSqlStatement;
         }
         if ($trackSessions !== null) {
             $configuration->trackSessions = $trackSessions;
