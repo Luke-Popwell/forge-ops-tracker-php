@@ -26,6 +26,24 @@ final class ForgeOpsTracker
 
     /** The current trace, if one is open: a plain static property for the same reason $breadcrumbs is. */
     private static ?SpanBuffer $trace = null;
+
+    /**
+     * The current request's trace id, remote parent, name and errored flag (see RequestContext), set
+     * by startTrace() whether or not span tracing is on, cleared by finishTrace().
+     */
+    private static ?RequestContext $request = null;
+
+    /**
+     * Request context copied off onto an exception that escaped a framework integration (see
+     * snapshotOnto()), for when the framework only reports it after finishTrace() and the
+     * user/breadcrumb middleware have already cleared their state. A WeakMap keyed by the exception
+     * itself: the exception is the one thing guaranteed to travel from there to wherever it's
+     * finally reported, and a WeakMap leaves it exactly as the host app threw it (no dynamic
+     * property, no wrapper) and lets it be garbage collected as usual.
+     *
+     * @var \WeakMap<Throwable, array<string, mixed>>|null
+     */
+    private static ?\WeakMap $snapshots = null;
     private static bool $exceptionHandlerInstalled = false;
 
     /**
@@ -50,7 +68,11 @@ final class ForgeOpsTracker
     /** @var (callable(Throwable): void)|null */
     private static $previousExceptionHandler = null;
 
-    /** @param string[]|null $enabledEnvironments */
+    /**
+     * @param string[]|null $enabledEnvironments
+     * @param string[]|null $tracePropagationTargets see Configuration::$tracePropagationTargets; null
+     *     leaves the current setting alone (every host, unless something already changed it)
+     */
     public static function init(
         ?string $dsn = null,
         ?string $environment = null,
@@ -70,6 +92,8 @@ final class ForgeOpsTracker
         ?int $maxBreadcrumbs = null,
         ?bool $trackTracing = null,
         ?float $traceCaptureThreshold = null,
+        ?bool $propagateTraces = null,
+        ?array $tracePropagationTargets = null,
         ?bool $installExceptionHandler = null,
         mixed $logger = null,
     ): Configuration {
@@ -129,6 +153,12 @@ final class ForgeOpsTracker
         if ($traceCaptureThreshold !== null) {
             $configuration->traceCaptureThreshold = $traceCaptureThreshold;
         }
+        if ($propagateTraces !== null) {
+            $configuration->propagateTraces = $propagateTraces;
+        }
+        if ($tracePropagationTargets !== null) {
+            $configuration->tracePropagationTargets = $tracePropagationTargets;
+        }
         if ($logger !== null) {
             $configuration->logger = $logger;
         }
@@ -144,10 +174,93 @@ final class ForgeOpsTracker
      * @param array<string, mixed> $context
      * @param array<string, mixed>|null $user defaults to whatever setUser() last set; pass one
      *     explicitly to override that for this one report.
+     *
+     * During a request (between startTrace() and finishTrace()), the event also carries the
+     * request's trace_id, transaction_name and endpoint, and the request is marked errored so its
+     * trace is sent however fast it was. An exception a framework integration saw escape the
+     * request falls back to the copy snapshotOnto() made of all of that (and of the user and
+     * breadcrumb trail), for when the framework reports it only after the request's state is gone.
      */
     public static function captureException(Throwable $throwable, array $context = [], ?array $user = null): void
     {
-        self::reporter()->report($throwable, $context, $user ?? self::$currentUser, self::currentBreadcrumbs());
+        $snapshot = self::$snapshots[$throwable] ?? [];
+        $request = self::$request;
+        $request?->markErrored();
+
+        $breadcrumbs = self::currentBreadcrumbs();
+        if ($breadcrumbs === []) {
+            $breadcrumbs = $snapshot['breadcrumbs'] ?? [];
+        }
+
+        self::reporter()->report(
+            $throwable,
+            $context,
+            $user ?? self::$currentUser ?? $snapshot['user'] ?? null,
+            $breadcrumbs,
+            $request !== null ? $request->transactionName : $snapshot['transaction_name'] ?? null,
+            $request !== null ? $request->endpoint() : $snapshot['endpoint'] ?? null,
+            $request !== null ? $request->traceId : $snapshot['trace_id'] ?? null,
+        );
+    }
+
+    /**
+     * The current request's W3C trace id (32 lowercase hex characters), or null outside a request.
+     * Handy for your own logs: it's the id ForgeOps links errors across services with.
+     */
+    public static function currentTraceId(): ?string
+    {
+        return self::$request?->traceId;
+    }
+
+    /**
+     * Names the current request once the framework has matched its route: $transactionName is the
+     * same name its performance sample and root span use, $endpoint the HTTP method plus the route
+     * pattern ("GET /users/{id}"), or a Closure returning it when that's costly to work out (see
+     * RequestContext::setEndpoint()). Called by the Laravel middleware and Symfony listener as early
+     * as each framework allows, so an error reported partway through the controller already carries
+     * both; a no-op outside a request. Not something app code normally calls directly.
+     *
+     * @param string|(\Closure(): ?string)|null $endpoint
+     */
+    public static function setRequestRoute(?string $transactionName, string|\Closure|null $endpoint): void
+    {
+        if (self::$request === null) {
+            return;
+        }
+
+        self::$request->transactionName = $transactionName;
+        self::$request->setEndpoint($endpoint);
+    }
+
+    /**
+     * Copies the current request's trace id, transaction name and endpoint, plus the affected user
+     * and breadcrumb trail, onto $throwable (see $snapshots) and marks the request errored. Called
+     * by the Laravel middleware when an exception escapes the request, just before its own finally
+     * clears that state, so a report the framework only makes afterward still has it. The first
+     * snapshot wins if the same exception passes through twice: the innermost one saw the request
+     * closest to where it failed. Never throws. Not something app code normally calls directly.
+     */
+    public static function snapshotOnto(Throwable $throwable): void
+    {
+        try {
+            $request = self::$request;
+            $request?->markErrored();
+
+            self::$snapshots ??= new \WeakMap();
+            if (isset(self::$snapshots[$throwable])) {
+                return;
+            }
+
+            self::$snapshots[$throwable] = [
+                'user' => self::$currentUser,
+                'breadcrumbs' => self::currentBreadcrumbs(),
+                'transaction_name' => $request?->transactionName,
+                'endpoint' => $request?->endpoint(),
+                'trace_id' => $request?->traceId,
+            ];
+        } catch (Throwable) {
+            // A failure here must never replace the host app's own exception with one of ours.
+        }
     }
 
     /**
@@ -344,25 +457,45 @@ final class ForgeOpsTracker
 
     /**
      * Starts a fresh trace, discarding any earlier one. Called by the Laravel middleware and
-     * Symfony listener at the start of every request; a no-op when trackTracing is off or the
-     * client isn't enabled. Not something app code normally calls directly.
+     * Symfony listener at the start of every request, with the request's own `traceparent` header:
+     * a usable W3C value continues the caller's trace (same trace id, and the root span's parent is
+     * the caller's span), anything else (null, blank, malformed) starts a new one. Not something
+     * app code normally calls directly, except to trace work that isn't a request (see the README).
+     *
+     * The trace id exists whenever the client is enabled, even with trackTracing off, since errors
+     * captured before finishTrace() carry it and httpSpan() propagates it; only span recording is
+     * gated on trackTracing. A no-op when the client isn't enabled.
      */
-    public static function startTrace(): void
+    public static function startTrace(?string $traceparent = null): void
     {
         $configuration = self::configuration();
-        self::$trace = $configuration->trackTracing && $configuration->isEnabled() ? new SpanBuffer($configuration) : null;
+        if (!$configuration->isEnabled()) {
+            self::$request = null;
+            self::$trace = null;
+
+            return;
+        }
+
+        self::$request = RequestContext::fromTraceparent($traceparent);
+        self::$trace = $configuration->trackTracing
+            ? new SpanBuffer($configuration, self::$request->traceId, self::$request->parentSpanId)
+            : null;
     }
 
     /**
      * Ends the current trace, queueing it for delivery when the root took at least
-     * traceCaptureThreshold, and always clears it (back to null, so nothing leaks into the next
-     * request on a long-running worker). $startedAt is a microtime(true) value.
+     * traceCaptureThreshold or the request errored (an error was captured during it, or an
+     * exception escaped it), and always clears it along with the request context (back to null, so
+     * nothing leaks into the next request on a long-running worker). $startedAt is a
+     * microtime(true) value.
      */
     public static function finishTrace(string $rootName, float $startedAt, float $durationMs): void
     {
         $trace = self::$trace;
+        $errored = self::$request?->errored() ?? false;
         self::$trace = null;
-        $payload = $trace?->finishTrace($rootName, $startedAt, $durationMs);
+        self::$request = null;
+        $payload = $trace?->finishTrace($rootName, $startedAt, $durationMs, $errored);
         if ($payload !== null) {
             self::spanFlusher()->push($payload);
         }
@@ -393,6 +526,53 @@ final class ForgeOpsTracker
             return $work();
         } finally {
             $trace->finish($id, $name, $kind, $startedAt, (microtime(true) - $startedAt) * 1000, $data);
+        }
+    }
+
+    /**
+     * Makes one outgoing HTTP call inside the current trace: records it as an "http" span named
+     * "<METHOD> <host>" (never the path or query, which could carry an id or a token) and hands
+     * $send the headers to add to the request, currently a W3C `traceparent` whose parent id is
+     * that span's own id, so the called service's root span nests under it. Returns whatever $send
+     * returns; the span is recorded even when $send throws, which is rethrown unchanged.
+     *
+     *     $response = ForgeOpsTracker::httpSpan('POST', $url, fn (array $headers) => Http::withHeaders($headers)->post($url, $body));
+     *
+     * The headers are empty outside a trace, when propagateTraces is off, or when the host isn't
+     * in tracePropagationTargets; outside a trace no span is recorded either. With trackTracing off
+     * the header is still sent (the trace id links errors across services) but no span is kept.
+     *
+     * @template T
+     * @param callable(array<string, string>): T $send
+     * @param array<string, mixed> $data
+     * @return T
+     */
+    public static function httpSpan(string $method, string $url, callable $send, array $data = []): mixed
+    {
+        $request = self::$request;
+        if ($request === null) {
+            return $send([]);
+        }
+
+        $host = parse_url($url, PHP_URL_HOST);
+        $host = is_string($host) ? strtolower($host) : null;
+        $spanId = TraceParent::generateSpanId();
+        $headers = self::configuration()->shouldPropagateTrace($host)
+            ? [TraceParent::HEADER => TraceParent::build($request->traceId, $spanId)]
+            : [];
+
+        $trace = self::$trace;
+        if ($trace === null) {
+            return $send($headers);
+        }
+
+        $trace->open($spanId);
+        $startedAt = microtime(true);
+        try {
+            return $send($headers);
+        } finally {
+            $name = strtoupper($method) . ' ' . ($host ?? 'unknown');
+            $trace->finish($spanId, $name, 'http', $startedAt, (microtime(true) - $startedAt) * 1000, $data);
         }
     }
 
@@ -523,6 +703,8 @@ final class ForgeOpsTracker
         self::$metricBuffer = null;
         self::$infrastructureMetricBuffer = null;
         self::$trace = null;
+        self::$request = null;
+        self::$snapshots = null;
         self::$exceptionHandlerInstalled = false;
         self::$previousExceptionHandler = null;
         self::$currentUser = null;

@@ -96,8 +96,29 @@ final class Configuration
      */
     public bool $trackTracing = true;
 
-    /** A trace is only sent when its root span took at least this many seconds. */
+    /** A trace is only sent when its root span took at least this many seconds, or the request errored. */
     public float $traceCaptureThreshold = 1.0;
+
+    /**
+     * Whether ForgeOpsTracker::httpSpan() hands its callback a W3C `traceparent` header
+     * (https://www.w3.org/TR/trace-context/) for the outgoing request, so the service being called
+     * can continue this request's trace instead of starting its own. On by default, and independent
+     * of trackTracing: the header also carries the trace id that links an error here to an error
+     * there, which is useful with or without spans.
+     */
+    public bool $propagateTraces = true;
+
+    /**
+     * Which hosts get that header. null (the default) means every host. Otherwise a list where each
+     * entry is either a host, matching that host and its subdomains on a dot boundary, ignoring case
+     * and a leading dot ("example.com" matches "api.example.com" but not "badexample.com"), or a
+     * PCRE pattern with "/" delimiters (e.g. '/^10\.0\./'), matched against the host. A hostname
+     * can never start with "/", so the two can't be confused. Useful for third-party APIs that
+     * reject unknown headers, or that shouldn't learn this app's trace ids at all.
+     *
+     * @var string[]|null
+     */
+    public ?array $tracePropagationTargets = null;
 
     /**
      * Oldest entry dropped once this many have accumulated in a single request (or queue job): the
@@ -223,6 +244,47 @@ final class Configuration
         }
 
         return substr($uri, 0, -strlen('/events')) . '/spans';
+    }
+
+    /**
+     * Whether an outgoing request to $host should carry a traceparent header; see
+     * $propagateTraces/$tracePropagationTargets above. Case-insensitive, since hostnames are.
+     */
+    public function shouldPropagateTrace(?string $host): bool
+    {
+        if (!$this->propagateTraces) {
+            return false;
+        }
+        if ($this->tracePropagationTargets === null) {
+            return true;
+        }
+
+        $host = strtolower($host ?? '');
+        if ($host === '') {
+            return false;
+        }
+
+        foreach ($this->tracePropagationTargets as $target) {
+            if (!is_string($target) || $target === '') {
+                continue;
+            }
+            if ($target[0] === '/') {
+                // @ because an invalid pattern must never break the host app's own request; it
+                // simply never matches.
+                if (@preg_match($target, $host) === 1) {
+                    return true;
+                }
+
+                continue;
+            }
+
+            $target = ltrim(strtolower($target), '.');
+            if ($target !== '' && ($host === $target || str_ends_with($host, '.' . $target))) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function isEnabled(): bool

@@ -28,14 +28,21 @@ class Reporter
      * @param array<string, mixed>|null $user
      * @param array<int, array<string, mixed>> $breadcrumbs
      */
-    public function report(Throwable $throwable, array $context = [], ?array $user = null, array $breadcrumbs = []): void
-    {
+    public function report(
+        Throwable $throwable,
+        array $context = [],
+        ?array $user = null,
+        array $breadcrumbs = [],
+        ?string $transactionName = null,
+        ?string $endpoint = null,
+        ?string $traceId = null,
+    ): void {
         try {
             if (!$this->configuration->isEnabled()) {
                 return;
             }
 
-            $payload = $this->eventBuilder->build($throwable, $context, $user, $breadcrumbs);
+            $payload = $this->eventBuilder->build($throwable, $context, $user, $breadcrumbs, $transactionName, $endpoint, $traceId);
             $this->deliveryQueue->push($payload);
         } catch (Throwable $e) {
             $this->configuration->log(

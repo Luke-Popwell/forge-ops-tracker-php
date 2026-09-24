@@ -9,6 +9,7 @@ use Symfony\Component\EventDispatcher\EventSubscriberInterface;
 use Symfony\Component\HttpKernel\Event\RequestEvent;
 use Symfony\Component\HttpKernel\Event\ResponseEvent;
 use Symfony\Component\HttpKernel\KernelEvents;
+use Symfony\Component\Routing\RouterInterface;
 
 /**
  * Autowired/autoconfigured the same way as ForgeOpsTrackerSessionListener (see that class's own
@@ -24,7 +25,19 @@ use Symfony\Component\HttpKernel\KernelEvents;
  *
  * Also opens a trace for the request and finishes it here, root span named like the transaction;
  * with no Doctrine/DBAL hook in this integration the only automatic span is the request itself,
- * so add the rest by hand with ForgeOpsTracker::span().
+ * so add the rest by hand with ForgeOpsTracker::span(), and outbound HTTP with
+ * ForgeOpsTracker::httpSpan(), which also hands it the traceparent header to send.
+ *
+ * The trace continues the caller's when the request arrived with a usable W3C `traceparent`
+ * header (see TraceParent), and its trace id exists even with trackTracing off, since every error
+ * reported during the request carries it. kernel.request runs after Symfony's own RouterListener
+ * (priority 32, this one 0), so "_route" is already set there and the request is named before the
+ * controller runs: an error reported from the controller, or by ForgeOpsTrackerExceptionListener on
+ * kernel.exception (which fires before kernel.response), carries the transaction name, the
+ * endpoint, and the trace id. The endpoint is the method plus the route's declared path
+ * ("GET /users/{id}"), read from the router when one is injected (autowired as usual); since
+ * Symfony only loads its full route collection on demand, that lookup is deferred until an error
+ * actually needs it. Without a router the endpoint is simply left out.
  *
  * Also records a breadcrumb alongside this one performance sample, gated on trackBreadcrumbs
  * independently of trackPerformance (see ForgeOpsTracker::recordBreadcrumb()'s own doc comment
@@ -37,6 +50,10 @@ use Symfony\Component\HttpKernel\KernelEvents;
 final class ForgeOpsTrackerPerformanceListener implements EventSubscriberInterface
 {
     private const START_ATTRIBUTE = '_forge_ops_tracker_performance_start';
+
+    public function __construct(private ?RouterInterface $router = null)
+    {
+    }
 
     public static function getSubscribedEvents(): array
     {
@@ -52,8 +69,23 @@ final class ForgeOpsTrackerPerformanceListener implements EventSubscriberInterfa
             return;
         }
 
-        $event->getRequest()->attributes->set(self::START_ATTRIBUTE, microtime(true));
-        ForgeOpsTracker::startTrace();
+        $request = $event->getRequest();
+        $request->attributes->set(self::START_ATTRIBUTE, microtime(true));
+        ForgeOpsTracker::startTrace($request->headers->get('traceparent'));
+
+        $routeName = $request->attributes->get('_route');
+        if (is_string($routeName)) {
+            $method = $request->getMethod();
+            $router = $this->router;
+            ForgeOpsTracker::setRequestRoute(
+                $method . ' ' . $routeName,
+                $router === null ? null : static function () use ($router, $routeName, $method): ?string {
+                    $path = $router->getRouteCollection()->get($routeName)?->getPath();
+
+                    return $path === null ? null : $method . ' ' . $path;
+                },
+            );
+        }
     }
 
     public function onKernelResponse(ResponseEvent $event): void

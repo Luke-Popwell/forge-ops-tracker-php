@@ -9,6 +9,11 @@ namespace ForgeOps\Tracker;
  * static property on ForgeOpsTracker, the same shared-nothing reasoning BreadcrumbBuffer's own doc
  * comment gives. Nesting comes from a stack of open span ids: a span started while another is
  * open becomes its child, and anything else parents under the root.
+ *
+ * The trace id and remote parent span id come from the request's RequestContext (see
+ * ForgeOpsTracker::startTrace()), so a trace this sends and an error event from the same request
+ * always agree on which trace they belong to. When the request continued another service's trace,
+ * the root span's parent_span_id is that service's span, which ForgeOps treats as a remote parent.
  */
 final class SpanBuffer
 {
@@ -19,6 +24,7 @@ final class SpanBuffer
 
     private string $traceId;
     private string $rootSpanId;
+    private ?string $remoteParentSpanId;
 
     /** @var array<int, array<string, mixed>> */
     private array $spans = [];
@@ -26,10 +32,11 @@ final class SpanBuffer
     /** @var string[] */
     private array $openSpanIds = [];
 
-    public function __construct(private Configuration $configuration)
+    public function __construct(private Configuration $configuration, ?string $traceId = null, ?string $remoteParentSpanId = null)
     {
-        $this->traceId = bin2hex(random_bytes(16));
-        $this->rootSpanId = bin2hex(random_bytes(8));
+        $this->traceId = $traceId ?? TraceParent::generateTraceId();
+        $this->rootSpanId = TraceParent::generateSpanId();
+        $this->remoteParentSpanId = $remoteParentSpanId;
     }
 
     public function traceId(): string
@@ -37,10 +44,13 @@ final class SpanBuffer
         return $this->traceId;
     }
 
-    /** Opens a span and returns its id; pair with finish(). */
-    public function open(): string
+    /**
+     * Opens a span and returns its id; pair with finish(). $id is one generated beforehand, as
+     * ForgeOpsTracker::httpSpan() does so its outgoing traceparent header can name the span.
+     */
+    public function open(?string $id = null): string
     {
-        $id = bin2hex(random_bytes(8));
+        $id ??= TraceParent::generateSpanId();
         $this->openSpanIds[] = $id;
 
         return $id;
@@ -60,7 +70,7 @@ final class SpanBuffer
      */
     public function recordLeaf(string $name, string $kind, float $startedAt, float $durationMs, array $data = []): void
     {
-        $this->record(bin2hex(random_bytes(8)), $name, $kind, $startedAt, $durationMs, $data);
+        $this->record(TraceParent::generateSpanId(), $name, $kind, $startedAt, $durationMs, $data);
     }
 
     /** @param array<string, mixed> $data */
@@ -101,19 +111,21 @@ final class SpanBuffer
 
     /**
      * The wire payload once the trace is over: the root span plus everything recorded beneath it,
-     * or null when the root was faster than Configuration::$traceCaptureThreshold.
+     * or null when the root was faster than Configuration::$traceCaptureThreshold and the request
+     * didn't error. An errored request's trace is always sent, however fast it was, since the
+     * waterfall of what led up to an error is exactly what an issue page wants to show next to it.
      *
      * @return array<string, mixed>|null
      */
-    public function finishTrace(string $rootName, float $startedAt, float $durationMs): ?array
+    public function finishTrace(string $rootName, float $startedAt, float $durationMs, bool $errored = false): ?array
     {
-        if ($durationMs < $this->configuration->traceCaptureThreshold * 1000) {
+        if (!$errored && $durationMs < $this->configuration->traceCaptureThreshold * 1000) {
             return null;
         }
 
         return [
             'trace_id' => $this->traceId,
-            'spans' => array_merge([$this->build($this->rootSpanId, null, $rootName, 'controller', $startedAt, $durationMs, [])], $this->spans),
+            'spans' => array_merge([$this->build($this->rootSpanId, $this->remoteParentSpanId, $rootName, 'controller', $startedAt, $durationMs, [])], $this->spans),
         ];
     }
 }

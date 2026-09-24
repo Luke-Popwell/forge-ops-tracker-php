@@ -37,9 +37,23 @@ class EventBuilder
      * @param array<string, mixed> $context
      * @param array<string, mixed>|null $user
      * @param array<int, array<string, mixed>> $breadcrumbs
+     *
+     * $transactionName/$endpoint/$traceId describe the request the error happened in (see
+     * RequestContext): $transactionName is the same "GET users/{id}" name the request's root span
+     * and performance sample use, $endpoint the HTTP method plus the route pattern
+     * ("GET /users/{id}"), and $traceId the request's 32-character lowercase hex W3C trace id,
+     * which is also what links this error to errors other services reported for the same trace.
+     * All three are null outside a request, and each is left out of the payload when null.
      */
-    public function build(Throwable $throwable, array $context = [], ?array $user = null, array $breadcrumbs = []): array
-    {
+    public function build(
+        Throwable $throwable,
+        array $context = [],
+        ?array $user = null,
+        array $breadcrumbs = [],
+        ?string $transactionName = null,
+        ?string $endpoint = null,
+        ?string $traceId = null,
+    ): array {
         $payload = [
             'exception_class' => get_class($throwable),
             'message' => $throwable->getMessage(),
@@ -57,6 +71,15 @@ class EventBuilder
         }
         if ($breadcrumbs !== []) {
             $payload['breadcrumbs'] = $breadcrumbs;
+        }
+        if ($transactionName !== null) {
+            $payload['transaction_name'] = $transactionName;
+        }
+        if ($endpoint !== null) {
+            $payload['endpoint'] = $endpoint;
+        }
+        if ($traceId !== null) {
+            $payload['trace_id'] = $traceId;
         }
         $payload = $this->attachSql($payload, $throwable);
 
@@ -88,9 +111,11 @@ class EventBuilder
         return $payload;
     }
 
-    // exception_class/occurred_at/environment/release/server_name/sdk_name/user are left
-    // alone: structured fields this client or the host app sets deliberately, not free text an
-    // exception or its context could accidentally spill sensitive data into. user specifically
+    // exception_class/occurred_at/environment/release/server_name/sdk_name/user/transaction_name/
+    // endpoint/trace_id are left alone: structured fields this client or the host app sets
+    // deliberately, not free text an exception or its context could accidentally spill sensitive
+    // data into (endpoint in particular is a declared route pattern, never the literal path, so no
+    // id or token from a URL ever lands there). user specifically
     // is a deliberate exemption, not an oversight: PiiScrubber's own email pattern would
     // otherwise redact the exact thing this field exists to carry. breadcrumbs is *not* exempt,
     // unlike user: query/request-lifecycle trail entries are exactly the kind of free text (a

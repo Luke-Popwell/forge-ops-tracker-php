@@ -347,14 +347,14 @@ widget builder "slowest transactions" already uses.
 A slow request's own breakdown: which database queries or pieces of your code the time went to,
 shown as a span tree on ForgeOps. On by default once the Laravel middleware or Symfony listener is
 registered: the request itself becomes the root span (named like its performance transaction),
-and it is sent only when it took at least `traceCaptureThreshold` seconds (1.0 by default), so fast
-requests cost nothing on the wire. Traces are per service; nothing is propagated across services.
+and it is sent when it took at least `traceCaptureThreshold` seconds (1.0 by default) or when an
+error was reported during it, so fast, successful requests cost nothing on the wire.
 
 **Automatic:** the request (Laravel and Symfony) and every database query (Laravel only, the same
 `DB::listen` hook performance monitoring already uses; a `database` span named `"SELECT users"`, never
 the SQL text). Symfony has no query hook in this integration, and neither framework's outbound HTTP
 client is instrumented (there is no stable global hook across supported versions), so add those by
-hand:
+hand (for outbound HTTP, prefer `httpSpan()`, below):
 
 ```php
 $order = ForgeOpsTracker::span('charge card', fn () => $gateway->charge($id), 'service', ['order' => $id]);
@@ -370,6 +370,75 @@ finished trace is delivered after the response, the same way performance samples
 is not traced automatically; wrap one yourself with `ForgeOpsTracker::startTrace()` and
 `finishTrace($name, $startedAt, $durationMs)`, then `flushSpans()`. Configure with
 `init(trackTracing: false)` and `init(traceCaptureThreshold: 2.5)`.
+
+### Following a request across services
+
+Traces use the [W3C Trace Context](https://www.w3.org/TR/trace-context/) standard (a `traceparent`
+header), so an error or a slow call can be followed from one service into the next.
+
+**Incoming**: automatic. A request that arrives with a valid `traceparent` header continues that
+trace (same trace id), and its root span records the caller's span as its parent. A missing or
+malformed header just starts a new trace.
+
+**Outgoing**: wrap each HTTP call you make during a request in `httpSpan()`. It records the call as
+an `http` span named after the method and host (never the path or query) and hands your callback
+the headers to add; the header's parent id is that span's own id, so the called service's spans
+nest under it. It works with any HTTP client, records the span even when the call throws
+(rethrowing it unchanged), and returns whatever your callback returns:
+
+```php
+use Illuminate\Support\Facades\Http;
+
+$response = ForgeOpsTracker::httpSpan('POST', $url, fn (array $headers) => Http::withHeaders($headers)->post($url, $order));
+
+// Any other client works the same way: the headers are a plain ['traceparent' => '00-...'] array.
+$response = ForgeOpsTracker::httpSpan('GET', $url, fn (array $headers) => $guzzle->get($url, ['headers' => $headers]));
+```
+
+Outside a request the callback gets an empty array and nothing is recorded, so the same code works
+in a queue job or a script. `ForgeOpsTracker::currentTraceId()` returns the current request's trace
+id, for your own logs. To trace work that isn't a request but continues one (a job carrying the
+header it was queued with, say), pass that header to `ForgeOpsTracker::startTrace($traceparent)`.
+
+A trace id exists for every request even with `trackTracing: false`, and the header is still sent,
+since the trace id is also what links an error here to an error in the service you called (see
+[Where an error happened](#where-an-error-happened)); only span reporting stops. The service on the
+other end must also report to ForgeOps, and both projects must be linked in ForgeOps to see their
+errors and traces connected.
+
+Narrow or turn off where the header goes, for example if a third-party API rejects unknown headers:
+
+```php
+ForgeOpsTracker::init(
+    dsn: '...',
+    propagateTraces: false, // never send traceparent (default true)
+
+    // Default null: every host. A host matches itself and its subdomains on a dot boundary
+    // ("internal.example" matches "orders.internal.example", not "notinternal.example"); an entry
+    // starting with "/" is a regular expression matched against the host.
+    tracePropagationTargets: ['internal.example', '/^10\.0\./'],
+);
+```
+
+### Where an error happened
+
+An error reported during a request (unhandled, or your own `captureException()` call from inside
+the controller) carries three extra fields:
+
+- `transaction_name`: the same name performance monitoring and traces use, `"GET users/{id}"` in
+  Laravel or `"GET user_detail"` (the route name) in Symfony.
+- `endpoint`: the HTTP method and the route as declared, `"GET /users/{id}"`. Never the literal
+  path, so an id or a token in the URL never ends up here. Symfony's comes from the router
+  (autowired into `ForgeOpsTrackerPerformanceListener`), looked up only when an error needs it.
+- `trace_id`: the request's W3C trace id, which ForgeOps uses to link this error to errors that
+  other services reported for the same trace.
+
+They're filled in as soon as the framework has matched the route (Laravel's `RouteMatched` event;
+Symfony's router runs before the listener), need the performance middleware or listener to be
+registered, and are left out entirely outside a request. They're never PII-scrubbed: they're
+structured fields, not free text. An exception that escapes the Laravel middleware keeps them, the
+affected user and the breadcrumb trail even if Laravel only reports it after the middleware has
+finished: they're copied onto the exception on its way out, and it's rethrown unchanged.
 
 ## Custom metrics and infrastructure monitoring
 

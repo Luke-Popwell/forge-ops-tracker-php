@@ -7,10 +7,13 @@ namespace ForgeOps\Tracker\Integrations\Laravel;
 use Closure;
 use ForgeOps\Tracker\ForgeOpsTracker;
 use ForgeOps\Tracker\QueryNaming;
+use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request;
+use Illuminate\Routing\Events\RouteMatched;
 use Illuminate\Support\Facades\DB;
 use Throwable;
+use WeakMap;
 
 /**
  * Register globally, the same way as ForgeOpsTrackerSessionMiddleware (see that class's own doc
@@ -53,7 +56,19 @@ use Throwable;
  * span named like the transaction) and records every query above as a "database" span under it, so a
  * slow request's own breakdown reaches /spans. Outbound HTTP made through Laravel's Http client
  * is not instrumented automatically (no stable global hook across supported versions): wrap it
- * in ForgeOpsTracker::span().
+ * in ForgeOpsTracker::httpSpan(), which also hands it the traceparent header to send.
+ *
+ * The trace continues the caller's when the request arrived with a usable W3C `traceparent`
+ * header (see TraceParent), and its trace id exists even with trackTracing off, since every error
+ * reported during the request carries it. The request is named (transaction name and endpoint) the
+ * moment Laravel's router fires RouteMatched, before any route middleware or the controller runs,
+ * so an error reported from inside the controller already carries both; global middleware like
+ * this one runs before routing, which is why it can't simply read $request->route() up front.
+ *
+ * An exception that escapes $next() (Laravel normally converts one to a response further in, but
+ * not every setup does) gets the request's context copied onto it before being rethrown unchanged
+ * (see ForgeOpsTracker::snapshotOnto()): the kernel reports such an exception only after this
+ * finally, and the user/breadcrumb middleware's own, have already cleared their state.
  *
  * Also records a breadcrumb alongside each of the two performance samples above (query and
  * controller), gated on trackBreadcrumbs independently of trackPerformance: see
@@ -85,12 +100,23 @@ final class ForgeOpsTrackerPerformanceMiddleware
 
         $start = microtime(true);
         $response = null;
-        ForgeOpsTracker::startTrace();
+        ForgeOpsTracker::startTrace($request->headers->get('traceparent'));
+        self::listenForRouteMatched();
+        // Already routed only when exercised standalone with a route resolver set (see
+        // LaravelPerformanceIntegrationTest); in a real app this is null until RouteMatched.
+        $route = $request->route();
+        if (is_object($route) && method_exists($route, 'uri')) {
+            ForgeOpsTracker::setRequestRoute(...self::names($request, $route->uri()));
+        }
 
         try {
             $response = $next($request);
 
             return $response;
+        } catch (Throwable $e) {
+            ForgeOpsTracker::snapshotOnto($e);
+
+            throw $e;
         } finally {
             $durationMs = (microtime(true) - $start) * 1000;
             $route = $request->route()?->uri() ?? $request->path();
@@ -110,6 +136,48 @@ final class ForgeOpsTrackerPerformanceMiddleware
             );
 
             ForgeOpsTracker::finishTrace($transactionName, $start, $durationMs);
+        }
+    }
+
+    /**
+     * The transaction name ("GET users/{id}", same as the performance sample) and endpoint
+     * ("GET /users/{id}": Laravel's route URI has no leading slash, the endpoint always does).
+     *
+     * @return array{0: string, 1: string}
+     */
+    public static function names(Request $request, string $uri): array
+    {
+        return [$request->method() . ' ' . $uri, $request->method() . ' /' . ltrim($uri, '/')];
+    }
+
+    /**
+     * Registers the RouteMatched listener once per event dispatcher, not once per request: under
+     * Octane the same dispatcher lives across many requests, and a listener added on every request
+     * would pile up. Does nothing when there's no container or dispatcher at all (the middleware
+     * exercised standalone), since naming the request then falls back to the finally above.
+     */
+    private static function listenForRouteMatched(): void
+    {
+        static $registered = null;
+        $registered ??= new WeakMap();
+
+        try {
+            if (!function_exists('app') || !app()->bound('events')) {
+                return;
+            }
+            $events = app('events');
+            if (!$events instanceof Dispatcher || isset($registered[$events])) {
+                return;
+            }
+            $registered[$events] = true;
+
+            $events->listen(RouteMatched::class, static function (RouteMatched $event): void {
+                ForgeOpsTracker::setRequestRoute(...self::names($event->request, $event->route->uri()));
+            });
+        } catch (Throwable $e) {
+            ForgeOpsTracker::configuration()->log(
+                '[forge-ops-tracker] could not attach route listener: ' . get_class($e) . ': ' . $e->getMessage()
+            );
         }
     }
 }
