@@ -32,9 +32,14 @@ class DeliveryQueue
     /** @var array<int, array<string, mixed>> */
     private array $pending = [];
 
+    /**
+     * @param string $deliverMethod the Client method each payload goes through: deliver() (error
+     *     events) by default, deliverChange() for ForgeOpsTracker::recordChange()'s own queue.
+     */
     public function __construct(
         private Configuration $configuration,
         private Client $client,
+        private string $deliverMethod = 'deliver',
     ) {
     }
 
@@ -64,7 +69,7 @@ class DeliveryQueue
     {
         foreach ($this->pending as $payload) {
             try {
-                $this->client->deliver($payload);
+                $this->client->{$this->deliverMethod}($payload);
             } catch (\Throwable $e) {
                 // Per-item, not wrapping the whole loop: one bad delivery
                 // must not stop every event queued after it in the same

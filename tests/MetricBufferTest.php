@@ -164,20 +164,21 @@ final class MetricBufferTest extends TestCase
     {
         $script = sprintf(
             <<<'PHP'
-            require %s;
-            \ForgeOps\Tracker\ForgeOpsTracker::init(
-                dsn: 'http://key@127.0.0.1:%d/api/v1/events',
-                environment: 'production',
-                release: 'a1b2c3d',
-                enabledEnvironments: ['production'],
-                serverName: 'cron-1',
-                installExceptionHandler: false,
-            );
-            \ForgeOps\Tracker\ForgeOpsTracker::captureMetric('signup');
-            \ForgeOps\Tracker\ForgeOpsTracker::captureMetric('payment', 49.0);
-            \ForgeOps\Tracker\ForgeOpsTracker::captureInfrastructureMetric('cpu', 0.42);
-            \ForgeOps\Tracker\ForgeOpsTracker::captureInfrastructureMetric('disk', 0.8, 'db-1');
-            PHP,
+                require %s;
+                \ForgeOps\Tracker\ForgeOpsTracker::init(
+                    dsn: 'http://key@127.0.0.1:%d/api/v1/events',
+                    environment: 'production',
+                    release: 'a1b2c3d',
+                    enabledEnvironments: ['production'],
+                    serverName: 'cron-1',
+                    installExceptionHandler: false,
+                    detectChanges: false,
+                );
+                \ForgeOps\Tracker\ForgeOpsTracker::captureMetric('signup');
+                \ForgeOps\Tracker\ForgeOpsTracker::captureMetric('payment', 49.0);
+                \ForgeOps\Tracker\ForgeOpsTracker::captureInfrastructureMetric('cpu', 0.42);
+                \ForgeOps\Tracker\ForgeOpsTracker::captureInfrastructureMetric('disk', 0.8, 'db-1');
+                PHP,
             var_export(dirname(__DIR__) . '/vendor/autoload.php', true),
             self::PORT
         );

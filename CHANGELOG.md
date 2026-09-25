@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.0 (2026-09-25)
+
+- New `ForgeOpsTracker::recordChange($kind, $title, $details = [], $environment = null, $service = null, $actor = null, $url = null, $id = null, $occurredAt = null)` records something that changed in your system (a feature flag, a config value, a hand-run migration) so ForgeOps can show it next to the errors that followed. `$kind` is one of `feature_flag`, `config`, `migration`, `dependency`, `infrastructure`, or `other`; anything else is sent as `other`. Delivered after the response like error events, never throws, and a no-op when the client isn't enabled. `ForgeOpsTracker::flushChanges()` sends right away.
+- Changes between deploys are now detected automatically. After `init()`, a shutdown function sends a snapshot of the PHP version and installed Composer package versions, and ForgeOps records whatever changed since the previous one. A marker file in the system temp directory keeps PHP-FPM from sending it on every request: each host sends it once per change. New `detectChanges` option (default `true`) turns this off.
+- New `trackEnvVarNames` option (default `false`) adds environment variable names, never values, to that snapshot. Host-specific names (`HOSTNAME`, `PATH`, `PORT`, `LC_*`, Kubernetes service variables, and others) and the client's own `FORGE_OPS_*` settings are always left out.
+
 ## 0.4.0
 
 - Every error reported during a request now says where it happened: `transaction_name` (the same `GET users/{id}` name the request's performance sample and root span use; `GET user_detail` in Symfony), `endpoint` (the HTTP method plus the route pattern, `GET /users/{id}`, never the literal path, so no ids or tokens), and `trace_id` (the request's W3C trace id). Laravel names the request as soon as its router matches the route and Symfony as soon as its router has run, so an error reported from inside the controller already has them. Symfony's endpoint comes from the autowired router, looked up only when an error needs it. Left out entirely outside a request. Structured fields, so they're never PII-scrubbed.

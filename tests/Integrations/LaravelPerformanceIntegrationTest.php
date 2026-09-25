@@ -6,9 +6,9 @@ namespace ForgeOps\Tracker\Tests\Integrations;
 
 use ForgeOps\Tracker\Client;
 use ForgeOps\Tracker\ForgeOpsTracker;
-use ForgeOps\Tracker\SpanFlusher;
 use ForgeOps\Tracker\Integrations\Laravel\ForgeOpsTrackerPerformanceMiddleware;
 use ForgeOps\Tracker\PerformanceFlusher;
+use ForgeOps\Tracker\SpanFlusher;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
 use PHPUnit\Framework\TestCase;

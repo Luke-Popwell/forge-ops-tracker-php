@@ -60,6 +60,23 @@ class Client
         return $this->post($this->configuration->spansUri(), $trace);
     }
 
+    /**
+     * One ForgeOpsTracker::recordChange() call. A plan without change tracking answers 403, which
+     * is just a false here like any other non-2xx.
+     *
+     * @param array<string, mixed> $payload
+     */
+    public function deliverChange(array $payload): bool
+    {
+        return $this->post($this->configuration->changesUri(), $payload);
+    }
+
+    /** @param array<string, mixed> $payload see ChangeSnapshot::payload() */
+    public function deliverChangeSnapshot(array $payload): bool
+    {
+        return $this->post($this->configuration->changeSnapshotsUri(), $payload);
+    }
+
     /** @param array<string, mixed> $payload */
     private function post(?string $uri, array $payload): bool
     {

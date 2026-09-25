@@ -469,6 +469,59 @@ worker would otherwise grow it without bound. A NaN or infinite value is dropped
 `json_encode` fails on one, which would make the whole batch fail to send. Requires a ForgeOps plan
 that includes custom metrics / infrastructure monitoring.
 
+## What changed
+
+ForgeOps can show what changed in your system next to the errors and slowdowns that followed it.
+Two ways in:
+
+**Record a change yourself** when something changes that no deploy captures, like a feature flag
+flipped, a config value edited, or a migration run by hand:
+
+```php
+use ForgeOps\Tracker\ForgeOpsTracker;
+
+ForgeOpsTracker::recordChange(
+    'feature_flag', // feature_flag, config, migration, dependency, infrastructure, or other
+    'Enabled new_checkout for 10% of users',
+    ['flag' => 'new_checkout', 'rollout_percent' => 10],
+    actor: 'ops@example.com',
+    url: 'https://flags.example.com/new_checkout',
+);
+```
+
+`$kind` and `$title` are required; `$details`, `$environment` (defaults to the configured one),
+`$service`, `$actor`, `$url`, `$id` (an idempotency key, so sending the same change twice records it
+once), and `$occurredAt` (a `DateTimeInterface` or ISO 8601 string, defaulting to now) are optional.
+An unknown `$kind` is sent as `other`. It's delivered from a shutdown function after the response
+has been sent, the same way error events are, never throws, and is a no-op when the client isn't
+enabled for the environment. A long-running worker can call `ForgeOpsTracker::flushChanges()` to
+send right away.
+
+**Changes between deploys are detected for you.** After `init()`, a shutdown function sends
+ForgeOps a snapshot of what the app is running: the PHP version and every installed Composer
+package version (from `Composer\InstalledVersions`). ForgeOps compares it with the previous one and
+records whatever changed, such as a package upgrade. Since PHP-FPM starts every request fresh, the
+client keeps a small marker file in the system temp directory with a hash of the last snapshot it
+sent, so each host sends it once per change rather than on every request (and sends nothing if that
+file can't be written).
+
+```php
+ForgeOpsTracker::init(
+    dsn: 'https://<api_key>@getforgeops.net/api/v1/events',
+    detectChanges: true,     // default; false sends no snapshot
+    trackEnvVarNames: false, // default; true also sends environment variable names
+);
+```
+
+With `trackEnvVarNames` on, the snapshot lists the names of your environment variables (never their
+values), so an added or removed variable shows up as a change. Names that differ from host to host,
+like `HOSTNAME`, `PATH`, `PORT`, `LC_*`, and Kubernetes service variables, are left out, as are the
+client's own `FORGE_OPS_*` settings. Under PHP-FPM these are the pool's variables, which
+`clear_env` empties by default.
+
+Requires a ForgeOps plan that includes change tracking; on a plan that doesn't, both are rejected
+server-side and dropped, exactly like any other delivery failure.
+
 ## Database errors
 
 When an error comes from a database call, the event includes the names of the stored procedure, table and view its SQL touched, so the issue tells you where to start looking. This is on by default and sends identifiers only, never values. The statement is read from `getSql()` on Laravel's `QueryException`, or from Doctrine DBAL's `DriverException::getQuery()`, on the exception or anything it wraps (`getPrevious()`). A raw `PDOException` carries none.

@@ -128,6 +128,22 @@ final class Configuration
      */
     public int $maxBreadcrumbs = 30;
 
+    /**
+     * Sends a snapshot of what this app is running (the PHP version and Composer package versions;
+     * see ChangeSnapshot) after init(), which ForgeOps diffs against the previous one to record what
+     * changed between deploys. On by default, same posture as every other automatic behavior here.
+     */
+    public bool $detectChanges = true;
+
+    /**
+     * Whether that snapshot also lists the names of this process's environment variables, so an
+     * added or removed variable shows up as a change. Off by default: names only, never values, but
+     * even names can say more about an app than some teams want to share. Host-specific names
+     * (HOSTNAME, PATH, PORT, and so on; see ChangeSnapshot) are always left out. Under PHP-FPM this
+     * is the pool's environment, which clear_env empties by default.
+     */
+    public bool $trackEnvVarNames = false;
+
     /** @var (callable(string): void)|null */
     public $logger = null;
 
@@ -230,6 +246,16 @@ final class Configuration
         }
 
         return str_ends_with($uri, '/events') ? substr($uri, 0, -strlen('/events')) . $replacement : $uri;
+    }
+
+    public function changesUri(): ?string
+    {
+        return $this->swapEventsSuffix('/changes');
+    }
+
+    public function changeSnapshotsUri(): ?string
+    {
+        return $this->swapEventsSuffix('/change_snapshots');
     }
 
     public function spansUri(): ?string

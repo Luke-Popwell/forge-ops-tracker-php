@@ -6,9 +6,9 @@ namespace ForgeOps\Tracker\Tests\Integrations;
 
 use ForgeOps\Tracker\Client;
 use ForgeOps\Tracker\ForgeOpsTracker;
-use ForgeOps\Tracker\SpanFlusher;
 use ForgeOps\Tracker\Integrations\Symfony\ForgeOpsTrackerPerformanceListener;
 use ForgeOps\Tracker\PerformanceFlusher;
+use ForgeOps\Tracker\SpanFlusher;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
 use Symfony\Component\EventDispatcher\EventDispatcher;

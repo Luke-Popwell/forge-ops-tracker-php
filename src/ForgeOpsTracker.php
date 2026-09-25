@@ -23,6 +23,15 @@ final class ForgeOpsTracker
     private static ?SpanFlusher $spanFlusher = null;
     private static ?MetricBuffer $metricBuffer = null;
     private static ?MetricBuffer $infrastructureMetricBuffer = null;
+    private static ?DeliveryQueue $changeQueue = null;
+
+    /**
+     * The startup change snapshot waiting to be sent at shutdown (see startChangeSnapshot()), and
+     * whether this process already scheduled one. Under PHP-FPM both reset with every request, which
+     * is why ChangeSnapshot::send() also checks a marker file before actually sending anything.
+     */
+    private static ?ChangeSnapshot $pendingChangeSnapshot = null;
+    private static bool $changeSnapshotScheduled = false;
 
     /** The current trace, if one is open: a plain static property for the same reason $breadcrumbs is. */
     private static ?SpanBuffer $trace = null;
@@ -96,6 +105,8 @@ final class ForgeOpsTracker
         ?array $tracePropagationTargets = null,
         ?bool $installExceptionHandler = null,
         mixed $logger = null,
+        ?bool $detectChanges = null,
+        ?bool $trackEnvVarNames = null,
     ): Configuration {
         $configuration = self::configuration();
 
@@ -162,10 +173,18 @@ final class ForgeOpsTracker
         if ($logger !== null) {
             $configuration->logger = $logger;
         }
+        if ($detectChanges !== null) {
+            $configuration->detectChanges = $detectChanges;
+        }
+        if ($trackEnvVarNames !== null) {
+            $configuration->trackEnvVarNames = $trackEnvVarNames;
+        }
 
         if ($installExceptionHandler ?? true) {
             self::installExceptionHandler();
         }
+
+        self::startChangeSnapshot();
 
         return $configuration;
     }
@@ -456,6 +475,103 @@ final class ForgeOpsTracker
     }
 
     /**
+     * Records one thing that changed in a running system, so ForgeOps can show it next to the errors
+     * and slowdowns that followed:
+     *
+     *     ForgeOpsTracker::recordChange('feature_flag', 'Enabled new_checkout for 10%', ['rollout' => 10]);
+     *
+     * $kind is one of feature_flag, config, migration, dependency, infrastructure, or other (anything
+     * else is sent as "other"). $environment defaults to the configured one; $occurredAt defaults to
+     * now; $id is an optional idempotency key. Queued and delivered after the response has been
+     * sent, the same way error events are (see DeliveryQueue). A no-op when the client isn't
+     * enabled. Never throws: returns false when nothing was queued.
+     *
+     * @param array<string, mixed> $details
+     */
+    public static function recordChange(
+        string $kind,
+        string $title,
+        array $details = [],
+        ?string $environment = null,
+        ?string $service = null,
+        ?string $actor = null,
+        ?string $url = null,
+        ?string $id = null,
+        \DateTimeInterface|string|null $occurredAt = null,
+    ): bool {
+        try {
+            $configuration = self::configuration();
+            if (!$configuration->isEnabled()) {
+                return false;
+            }
+
+            $payload = Change::build($configuration, $kind, $title, $details, $environment, $service, $actor, $url, $id, $occurredAt);
+            if ($payload === null) {
+                return false;
+            }
+
+            return self::changeQueue()->push($payload);
+        } catch (Throwable $e) {
+            self::configuration()->log('[forge-ops-tracker] recordChange failed: ' . get_class($e) . ': ' . $e->getMessage());
+
+            return false;
+        }
+    }
+
+    /**
+     * Delivers every queued recordChange() call, and the startup change snapshot if it hasn't gone
+     * yet, right now instead of at shutdown: e.g. after each job in a long-running queue worker.
+     */
+    public static function flushChanges(): void
+    {
+        self::$changeQueue?->flush();
+
+        $snapshot = self::$pendingChangeSnapshot;
+        self::$pendingChangeSnapshot = null;
+        $snapshot?->send();
+    }
+
+    /**
+     * Schedules the startup change snapshot (see ChangeSnapshot) for this process's shutdown, after
+     * the response has been sent, so it never delays a request or a command. Called by init(); a
+     * second call is a no-op, and so is a call while the client isn't enabled or detectChanges is
+     * off (without using up the once). Never throws.
+     */
+    private static function startChangeSnapshot(): void
+    {
+        try {
+            $configuration = self::configuration();
+            if (self::$changeSnapshotScheduled || !$configuration->isEnabled() || !$configuration->detectChanges) {
+                return;
+            }
+            self::$changeSnapshotScheduled = true;
+            self::$pendingChangeSnapshot = new ChangeSnapshot($configuration, new Client($configuration));
+
+            register_shutdown_function(static function (): void {
+                if (self::$pendingChangeSnapshot === null) {
+                    return;
+                }
+                if (function_exists('fastcgi_finish_request')) {
+                    fastcgi_finish_request();
+                }
+                self::flushChanges();
+            });
+        } catch (Throwable) {
+            // A snapshot must never be able to break init().
+        }
+    }
+
+    private static function changeQueue(): DeliveryQueue
+    {
+        if (self::$changeQueue === null) {
+            $configuration = self::configuration();
+            self::$changeQueue = new DeliveryQueue($configuration, new Client($configuration), 'deliverChange');
+        }
+
+        return self::$changeQueue;
+    }
+
+    /**
      * Starts a fresh trace, discarding any earlier one. Called by the Laravel middleware and
      * Symfony listener at the start of every request, with the request's own `traceparent` header:
      * a usable W3C value continues the caller's trace (same trace id, and the root span's parent is
@@ -686,8 +802,13 @@ final class ForgeOpsTracker
         });
     }
 
-    /** @internal not part of the public API: resets static state between test cases */
-    public static function resetForTesting(): void
+    /**
+     * @internal not part of the public API: resets static state between test cases. The startup
+     * change snapshot is left marked as already scheduled, so the many tests that init() an enabled
+     * client don't each schedule a real one for the end of the test run; pass changeSnapshot: true
+     * to let the next init() schedule it (see ChangeSnapshotTest).
+     */
+    public static function resetForTesting(bool $changeSnapshot = false): void
     {
         if (self::$previousExceptionHandler !== null) {
             set_exception_handler(self::$previousExceptionHandler);
@@ -702,6 +823,9 @@ final class ForgeOpsTracker
         self::$spanFlusher = null;
         self::$metricBuffer = null;
         self::$infrastructureMetricBuffer = null;
+        self::$changeQueue = null;
+        self::$pendingChangeSnapshot = null;
+        self::$changeSnapshotScheduled = !$changeSnapshot;
         self::$trace = null;
         self::$request = null;
         self::$snapshots = null;
