@@ -7,6 +7,8 @@ namespace ForgeOps\Tracker\Integrations\Laravel;
 use Closure;
 use ForgeOps\Tracker\ForgeOpsTracker;
 use ForgeOps\Tracker\QueryNaming;
+use ForgeOps\Tracker\QueryPlanner;
+use ForgeOps\Tracker\QueryPlans;
 use Illuminate\Contracts\Events\Dispatcher;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Http\Request;
@@ -58,6 +60,11 @@ use WeakMap;
  * is not instrumented automatically (no stable global hook across supported versions): wrap it
  * in ForgeOpsTracker::httpSpan(), which also hands it the traceparent header to send.
  *
+ * Each database span carries "db.statement" (the SQL with every string and number masked to "?")
+ * and "db.system" (from the connection's driver). With explainSlowQueries on, a slow plain SELECT
+ * on a PostgreSQL connection is also queued for an EXPLAIN, which terminate() runs after the
+ * response has been sent (see QueryPlanner and explainOnNewConnection()).
+ *
  * The trace continues the caller's when the request arrived with a usable W3C `traceparent`
  * header (see TraceParent), and its trace id exists even with trackTracing off, since every error
  * reported during the request carries it. The request is named (transaction name and endpoint) the
@@ -85,12 +92,25 @@ final class ForgeOpsTrackerPerformanceMiddleware
     {
         try {
             DB::listen(static function (QueryExecuted $query): void {
+                if (QueryPlanner::isExplaining()) {
+                    return; // the EXPLAIN's own statements, never an app query
+                }
                 $transactionName = QueryNaming::transactionName($query->sql);
                 $durationMs = $query->time ?? 0.0;
                 ForgeOpsTracker::recordPerformance($transactionName, $durationMs, 'query');
                 ForgeOpsTracker::recordBreadcrumb('query', $transactionName, data: ['duration_ms' => round($durationMs, 1)]);
                 // $query->time is milliseconds; the listener fires right after the query finished.
-                ForgeOpsTracker::recordSpan($transactionName, 'database', microtime(true) - $durationMs / 1000, $durationMs);
+                // The span carries the masked statement and db.system; the raw SQL and bindings are
+                // only captured by the explain closure, held until terminate() runs it.
+                $dbSystem = QueryPlans::dbSystem(self::driverName($query));
+                $explain = null;
+                if ($dbSystem === 'postgresql') {
+                    $connection = $query->connection;
+                    $sql = $query->sql;
+                    $bindings = $query->bindings;
+                    $explain = static fn (): mixed => self::explainOnNewConnection($connection, $sql, $bindings);
+                }
+                ForgeOpsTracker::recordDatabaseQuery($transactionName, microtime(true) - $durationMs / 1000, $durationMs, $query->sql, $dbSystem, $explain);
             });
         } catch (Throwable $e) {
             ForgeOpsTracker::configuration()->log(
@@ -136,6 +156,63 @@ final class ForgeOpsTrackerPerformanceMiddleware
             );
 
             ForgeOpsTracker::finishTrace($transactionName, $start, $durationMs);
+        }
+    }
+
+    /**
+     * Laravel calls this on global middleware after the response has been sent: the point where
+     * the opt-in EXPLAINs queued during the request run (see QueryPlanner). Never throws.
+     */
+    public function terminate(Request $request, mixed $response): void
+    {
+        ForgeOpsTracker::runQueryPlans();
+    }
+
+    /**
+     * Runs after the response (from terminate()), never during the request. Skips entirely while
+     * the app's own connection is still inside a transaction. Otherwise builds a brand new
+     * connection from the same config through Laravel's connection factory (not registered with
+     * the DatabaseManager and with no event dispatcher, so the app's connection, its PDO and its
+     * transaction state are never touched), makes its transaction READ ONLY with a
+     * statement_timeout, runs EXPLAIN (FORMAT JSON) with the original SQL and bindings, rolls back
+     * and disconnects. Returns the JSON text Postgres returns.
+     *
+     * @param array<int|string, mixed> $bindings
+     */
+    public static function explainOnNewConnection(object $appConnection, string $sql, array $bindings): mixed
+    {
+        if (method_exists($appConnection, 'transactionLevel') && $appConnection->transactionLevel() > 0) {
+            throw new \RuntimeException('the app connection is inside a transaction');
+        }
+
+        $config = $appConnection->getConfig();
+        $fresh = app('db.factory')->make(is_array($config) ? $config : [], $appConnection->getName() . '_forge_ops_explain');
+        try {
+            $fresh->beginTransaction();
+            $fresh->statement('SET TRANSACTION READ ONLY');
+            $fresh->statement("SET LOCAL statement_timeout = '" . QueryPlans::STATEMENT_TIMEOUT . "'");
+            $rows = $fresh->select('EXPLAIN (FORMAT JSON) ' . $sql, $bindings);
+        } finally {
+            try {
+                $fresh->rollBack();
+            } catch (Throwable) {
+                // Nothing to roll back if beginTransaction() itself failed.
+            }
+            $fresh->disconnect();
+        }
+
+        $row = $rows[0] ?? null;
+        $values = is_object($row) ? get_object_vars($row) : (is_array($row) ? $row : []);
+
+        return $values === [] ? null : reset($values);
+    }
+
+    private static function driverName(QueryExecuted $query): ?string
+    {
+        try {
+            return $query->connection->getDriverName();
+        } catch (Throwable) {
+            return null;
         }
     }
 

@@ -24,6 +24,7 @@ final class ForgeOpsTracker
     private static ?MetricBuffer $metricBuffer = null;
     private static ?MetricBuffer $infrastructureMetricBuffer = null;
     private static ?DeliveryQueue $changeQueue = null;
+    private static ?QueryPlanner $queryPlanner = null;
 
     /**
      * The startup change snapshot waiting to be sent at shutdown (see startChangeSnapshot()), and
@@ -107,6 +108,8 @@ final class ForgeOpsTracker
         mixed $logger = null,
         ?bool $detectChanges = null,
         ?bool $trackEnvVarNames = null,
+        ?bool $explainSlowQueries = null,
+        ?float $explainThresholdMs = null,
     ): Configuration {
         $configuration = self::configuration();
 
@@ -178,6 +181,12 @@ final class ForgeOpsTracker
         }
         if ($trackEnvVarNames !== null) {
             $configuration->trackEnvVarNames = $trackEnvVarNames;
+        }
+        if ($explainSlowQueries !== null) {
+            $configuration->explainSlowQueries = $explainSlowQueries;
+        }
+        if ($explainThresholdMs !== null) {
+            $configuration->explainThresholdMs = $explainThresholdMs;
         }
 
         if ($installExceptionHandler ?? true) {
@@ -624,12 +633,18 @@ final class ForgeOpsTracker
      *
      *     $order = ForgeOpsTracker::span('charge card', fn () => $gateway->charge($id), 'service', ['order' => $id]);
      *
+     * A 'database' span can carry its SQL: pass $statement (and optionally $dbSystem, e.g.
+     * 'postgresql') and the span's data gets "db.statement", with every string and number replaced
+     * by "?", and "db.system". The unmasked statement is never sent:
+     *
+     *     $rows = ForgeOpsTracker::span('Load orders', fn () => $pdo->query($sql)->fetchAll(), 'database', statement: $sql, dbSystem: 'postgresql');
+     *
      * @template T
      * @param callable(): T $work
      * @param array<string, mixed> $data
      * @return T
      */
-    public static function span(string $name, callable $work, string $kind = 'service', array $data = []): mixed
+    public static function span(string $name, callable $work, string $kind = 'service', array $data = [], ?string $statement = null, ?string $dbSystem = null): mixed
     {
         $trace = self::$trace;
         if ($trace === null) {
@@ -641,7 +656,7 @@ final class ForgeOpsTracker
         try {
             return $work();
         } finally {
-            $trace->finish($id, $name, $kind, $startedAt, (microtime(true) - $startedAt) * 1000, $data);
+            $trace->finish($id, $name, $kind, $startedAt, (microtime(true) - $startedAt) * 1000, self::databaseData($kind, $data, $statement, $dbSystem));
         }
     }
 
@@ -694,13 +709,85 @@ final class ForgeOpsTracker
 
     /**
      * Records a span you timed yourself under the current one; a no-op outside a trace.
-     * $startedAt is a microtime(true) value.
+     * $startedAt is a microtime(true) value. $statement and $dbSystem work as they do for span().
      *
      * @param array<string, mixed> $data
      */
-    public static function recordSpan(string $name, string $kind, float $startedAt, float $durationMs, array $data = []): void
+    public static function recordSpan(string $name, string $kind, float $startedAt, float $durationMs, array $data = [], ?string $statement = null, ?string $dbSystem = null): void
     {
-        self::$trace?->recordLeaf($name, $kind, $startedAt, $durationMs, $data);
+        $trace = self::$trace;
+        if ($trace === null) {
+            return;
+        }
+        $trace->recordLeaf($name, $kind, $startedAt, $durationMs, self::databaseData($kind, $data, $statement, $dbSystem));
+    }
+
+    /**
+     * Records one query a framework integration timed: a "database" span (inside a trace) carrying
+     * "db.statement", the statement with every string and number masked to "?", and "db.system",
+     * then offers the query to the opt-in EXPLAIN (see QueryPlanner). $explain, when given, runs
+     * EXPLAIN on a separate connection; it's only called after the response, from
+     * runQueryPlans(). Called by the Laravel middleware, not something app code normally calls
+     * directly. Never throws.
+     *
+     * @param (callable(): mixed)|null $explain
+     */
+    public static function recordDatabaseQuery(string $name, float $startedAt, float $durationMs, ?string $statement, ?string $dbSystem = null, ?callable $explain = null): void
+    {
+        try {
+            $masked = null;
+            $trace = self::$trace;
+            if ($trace !== null) {
+                $masked = SqlStatement::maskForSpan($statement);
+                $trace->recordLeaf($name, 'database', $startedAt, $durationMs, QueryPlans::spanData($masked, $dbSystem));
+            }
+            if ($explain !== null && $statement !== null && self::configuration()->explainSlowQueries) {
+                self::queryPlanner()->consider($statement, QueryPlans::dbSystem($dbSystem), $durationMs, $explain, $masked);
+            }
+        } catch (Throwable $e) {
+            self::configuration()->log('[forge-ops-tracker] database span failed: ' . get_class($e) . ': ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * Runs the EXPLAINs queued during this request and queues their plans for delivery. Called by
+     * the Laravel middleware's terminate(), after the response has been sent; a no-op when nothing
+     * is pending. Never throws.
+     */
+    public static function runQueryPlans(): void
+    {
+        try {
+            self::$queryPlanner?->runPending();
+        } catch (Throwable $e) {
+            self::configuration()->log('[forge-ops-tracker] query plans failed: ' . get_class($e) . ': ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private static function databaseData(string $kind, array $data, ?string $statement, ?string $dbSystem): array
+    {
+        if ($kind !== 'database' || ($statement === null && $dbSystem === null)) {
+            return $data;
+        }
+
+        return QueryPlans::spanData(SqlStatement::maskForSpan($statement), $dbSystem, $data);
+    }
+
+    private static function queryPlanner(): QueryPlanner
+    {
+        if (self::$queryPlanner === null) {
+            $configuration = self::configuration();
+            self::$queryPlanner = new QueryPlanner(
+                $configuration,
+                new DeliveryQueue($configuration, new Client($configuration), 'deliverQueryPlan'),
+                new QueryPlanRateLimiter($configuration),
+            );
+        }
+
+        return self::$queryPlanner;
     }
 
     /** Delivers every pending trace now, e.g. after each queue job in a long-running worker. */
@@ -824,6 +911,7 @@ final class ForgeOpsTracker
         self::$metricBuffer = null;
         self::$infrastructureMetricBuffer = null;
         self::$changeQueue = null;
+        self::$queryPlanner = null;
         self::$pendingChangeSnapshot = null;
         self::$changeSnapshotScheduled = !$changeSnapshot;
         self::$trace = null;

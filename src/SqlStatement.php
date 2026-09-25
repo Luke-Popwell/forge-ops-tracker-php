@@ -105,6 +105,17 @@ final class SqlStatement
     }
 
     /**
+     * The masked statement a database span carries as "db.statement": mask() above, capped at
+     * exactly MAX_LENGTH characters. null for a missing or blank statement.
+     */
+    public static function maskForSpan(?string $statement): ?string
+    {
+        $masked = self::mask($statement);
+
+        return $masked === null ? null : substr($masked, 0, self::MAX_LENGTH);
+    }
+
+    /**
      * Takes an already-masked statement (so a keyword inside a string value can't be mistaken for
      * SQL). Returns null when nothing recognizable was found.
      *

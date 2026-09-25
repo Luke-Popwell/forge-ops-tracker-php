@@ -351,8 +351,8 @@ and it is sent when it took at least `traceCaptureThreshold` seconds (1.0 by def
 error was reported during it, so fast, successful requests cost nothing on the wire.
 
 **Automatic:** the request (Laravel and Symfony) and every database query (Laravel only, the same
-`DB::listen` hook performance monitoring already uses; a `database` span named `"SELECT users"`, never
-the SQL text). Symfony has no query hook in this integration, and neither framework's outbound HTTP
+`DB::listen` hook performance monitoring already uses; a `database` span named `"SELECT users"`
+that carries the masked SQL, see [SQL on database spans](#sql-on-database-spans)). Symfony has no query hook in this integration, and neither framework's outbound HTTP
 client is instrumented (there is no stable global hook across supported versions), so add those by
 hand (for outbound HTTP, prefer `httpSpan()`, below):
 
@@ -370,6 +370,71 @@ finished trace is delivered after the response, the same way performance samples
 is not traced automatically; wrap one yourself with `ForgeOpsTracker::startTrace()` and
 `finishTrace($name, $startedAt, $durationMs)`, then `flushSpans()`. Configure with
 `init(trackTracing: false)` and `init(traceCaptureThreshold: 2.5)`.
+
+### SQL on database spans
+
+Every database span the Laravel middleware records carries the query's SQL as `db.statement`, with
+every string and number replaced by `?`, plus `db.system` (`postgresql`, `mysql`, `sqlite`, and so
+on, from the connection's driver). Bindings are never sent. So a slow request's waterfall shows
+which query was slow, not only which table:
+
+```
+select * from "orders" where "customer_id" = ? and "status" = ? order by "created_at" desc
+```
+
+A query you time yourself (plain PDO, say) can carry its SQL too. Pass `statement:` (and optionally
+`dbSystem:`) to a `database` span; it's masked the same way:
+
+```php
+$pdo = new PDO('sqlite:app.db');
+$sql = "SELECT id, total FROM orders WHERE customer_id = ? AND status = 'paid'";
+
+$rows = ForgeOpsTracker::span('Load orders', function () use ($pdo, $sql) {
+    $statement = $pdo->prepare($sql);
+    $statement->execute([42]);
+
+    return $statement->fetchAll();
+}, 'database', statement: $sql, dbSystem: 'sqlite');
+// The span's data: {"db.statement": "SELECT id, total FROM orders WHERE customer_id = ? AND status = ?",
+//                   "db.system": "sqlite"}
+```
+
+`recordSpan()` takes the same two named arguments for a span you timed yourself.
+
+### Query plans for slow PostgreSQL queries (opt-in, Laravel)
+
+With `explainSlowQueries: true`, a slow read on PostgreSQL also gets its query plan, so ForgeOps can
+show why it was slow (a sequential scan, a missing index) next to the query:
+
+```php
+ForgeOpsTracker::init(
+    explainSlowQueries: true,   // default false
+    explainThresholdMs: 500,    // milliseconds; default 500
+);
+```
+
+What it does:
+
+- Only for a query that took at least `explainThresholdMs`, on a `pgsql` connection, recorded by
+  `ForgeOpsTrackerPerformanceMiddleware`.
+- Only for a single plain `SELECT`: never a write, a statement with a second statement after it, a
+  `SELECT ... FOR UPDATE`/`FOR SHARE`, or a `WITH` query that modifies data.
+- Runs `EXPLAIN (FORMAT JSON)`, never `EXPLAIN ANALYZE`, so the query itself is not run again. It
+  runs after the response has been sent (from the middleware's `terminate()`), and not at all
+  while your connection is still inside a transaction. It opens a new connection with the same
+  settings (your own connection and its transaction are never touched), runs inside a `READ ONLY`
+  transaction with a 2 second `statement_timeout`, rolls back, and disconnects.
+- At most once per distinct query every 10 minutes, and at most 10 per minute per server (PHP-FPM
+  starts every request fresh, so the counts live in a small file in the system temp directory).
+- Sends the masked statement and the plan with every string in it masked the same way (a plan's
+  `Filter` repeats the query's values). Your bindings are used for the `EXPLAIN` and then dropped;
+  they are never sent. A plan over 64 KB is dropped.
+
+What it doesn't do: it doesn't run for MySQL, SQLite, or any other database, or for Symfony. If the
+`EXPLAIN` fails for any reason (a timeout, a permission error, a connection that can't be opened),
+it's logged through your `logger` and skipped; it never throws into your app. The database user
+needs no extra privileges beyond being able to run the query. Plans are stored only for projects
+with performance monitoring; otherwise ForgeOps quietly declines them.
 
 ### Following a request across services
 

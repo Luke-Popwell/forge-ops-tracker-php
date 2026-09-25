@@ -144,6 +144,20 @@ final class Configuration
      */
     public bool $trackEnvVarNames = false;
 
+    /**
+     * Opt-in EXPLAIN for slow PostgreSQL reads (see QueryPlanner). When on, a plain SELECT the
+     * Laravel integration timed at explainThresholdMs or more gets an EXPLAIN (FORMAT JSON), never
+     * EXPLAIN ANALYZE, after the response has been sent, on a new connection inside a READ ONLY
+     * transaction with a 2 second statement_timeout that is always rolled back. The masked
+     * statement and masked plan are sent; bind values never leave the process. Rate limited to one
+     * EXPLAIN per distinct statement per 10 minutes and 10 per minute on each server. Off by default
+     * because it does run extra (cheap, read-only) statements against your database.
+     */
+    public bool $explainSlowQueries = false;
+
+    /** Milliseconds a query has to take before explainSlowQueries considers it. */
+    public float $explainThresholdMs = 500.0;
+
     /** @var (callable(string): void)|null */
     public $logger = null;
 
@@ -256,6 +270,11 @@ final class Configuration
     public function changeSnapshotsUri(): ?string
     {
         return $this->swapEventsSuffix('/change_snapshots');
+    }
+
+    public function queryPlansUri(): ?string
+    {
+        return $this->swapEventsSuffix('/query_plans');
     }
 
     public function spansUri(): ?string

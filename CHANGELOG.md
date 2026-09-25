@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.0 (2026-09-25)
+
+- Database spans now carry their SQL. Every span the Laravel middleware records for a query has `db.statement` in its data, with every string and number replaced by `?` (capped at 4000 characters), and `db.system` (`postgresql`, `mysql`, `sqlite`, ...) from the connection's driver. Bindings are never sent.
+- `ForgeOpsTracker::span()` and `recordSpan()` take optional `statement:` and `dbSystem:` arguments for a `database` span you time yourself; the statement is masked the same way.
+- New opt-in `explainSlowQueries` (default `false`) and `explainThresholdMs` (default `500`). When on, a single plain `SELECT` on a PostgreSQL connection that took at least the threshold gets an `EXPLAIN (FORMAT JSON)` (never `EXPLAIN ANALYZE`) after the response has been sent, from `ForgeOpsTrackerPerformanceMiddleware::terminate()`, and only when the app's connection isn't inside a transaction. It runs on a new connection inside a `READ ONLY` transaction with a 2 second `statement_timeout`, then rolls back. The masked statement and the plan, with every string in it masked, are sent to ForgeOps. At most once per distinct statement every 10 minutes and 10 per minute per server. Any failure is logged and skipped.
+
 ## 0.5.0 (2026-09-25)
 
 - New `ForgeOpsTracker::recordChange($kind, $title, $details = [], $environment = null, $service = null, $actor = null, $url = null, $id = null, $occurredAt = null)` records something that changed in your system (a feature flag, a config value, a hand-run migration) so ForgeOps can show it next to the errors that followed. `$kind` is one of `feature_flag`, `config`, `migration`, `dependency`, `infrastructure`, or `other`; anything else is sent as `other`. Delivered after the response like error events, never throws, and a no-op when the client isn't enabled. `ForgeOpsTracker::flushChanges()` sends right away.

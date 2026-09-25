@@ -77,6 +77,17 @@ class Client
         return $this->post($this->configuration->changeSnapshotsUri(), $payload);
     }
 
+    /**
+     * One EXPLAIN plan for a slow query (see QueryPlanner). A project without performance
+     * monitoring answers 403, which is just a false here like any other non-2xx.
+     *
+     * @param array<string, mixed> $payload see QueryPlans::payload()
+     */
+    public function deliverQueryPlan(array $payload): bool
+    {
+        return $this->post($this->configuration->queryPlansUri(), $payload);
+    }
+
     /** @param array<string, mixed> $payload */
     private function post(?string $uri, array $payload): bool
     {
