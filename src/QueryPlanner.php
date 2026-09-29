@@ -67,7 +67,7 @@ class QueryPlanner
             if (count($this->pending) >= self::MAX_PENDING || !QueryPlans::explainable($statement)) {
                 return false;
             }
-            $masked ??= SqlStatement::maskForSpan($statement);
+            $masked ??= SqlStatement::maskForSpan($statement, $dbSystem);
             if ($masked === null || !$this->limiter->allow($masked)) {
                 return false;
             }

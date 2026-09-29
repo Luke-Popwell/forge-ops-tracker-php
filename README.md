@@ -375,8 +375,11 @@ is not traced automatically; wrap one yourself with `ForgeOpsTracker::startTrace
 
 Every database span the Laravel middleware records carries the query's SQL as `db.statement`, with
 every string and number replaced by `?`, plus `db.system` (`postgresql`, `mysql`, `sqlite`, and so
-on, from the connection's driver). Bindings are never sent. So a slow request's waterfall shows
-which query was slow, not only which table:
+on, from the connection's driver). Bindings are never sent. That includes escaped and prefixed
+strings (`E'o\'brien'`, `X'DEADBEEF'`), hex, binary and exponent numbers (`0x1F`, `0b101`,
+`1.5E-3`), and, on MySQL and MariaDB (where `"double quotes"` hold a string, not a name),
+double-quoted strings. So a slow request's waterfall shows which query was slow, not only which
+table:
 
 ```
 select * from "orders" where "customer_id" = ? and "status" = ? order by "created_at" desc

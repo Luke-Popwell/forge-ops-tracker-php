@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0 (2026-09-29)
+
+- SQL masking now also catches strings with a backslash-escaped quote (`'o\'brien'`, `E'o\'brien'`), prefixed strings (`E''`, `X''`, `N''`, `B''`, `U&''`, prefix included), hex, binary and exponent numbers (`0x1F`, `0b101`, `3e10`, `1.5E-3`, `.5`), and, on MySQL and MariaDB, `"double-quoted"` strings. `SqlStatement::mask()` and `maskForSpan()` take an optional database system, and database spans (including the `dbSystem:` argument to `span()` and `recordSpan()`) and EXPLAIN plans pass theirs. A quoted string longer than about 8,000 characters no longer makes the statement get dropped.
+
 ## 0.6.0 (2026-09-25)
 
 - Database spans now carry their SQL. Every span the Laravel middleware records for a query has `db.statement` in its data, with every string and number replaced by `?` (capped at 4000 characters), and `db.system` (`postgresql`, `mysql`, `sqlite`, ...) from the connection's driver. Bindings are never sent.

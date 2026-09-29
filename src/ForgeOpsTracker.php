@@ -738,7 +738,7 @@ final class ForgeOpsTracker
             $masked = null;
             $trace = self::$trace;
             if ($trace !== null) {
-                $masked = SqlStatement::maskForSpan($statement);
+                $masked = SqlStatement::maskForSpan($statement, $dbSystem);
                 $trace->recordLeaf($name, 'database', $startedAt, $durationMs, QueryPlans::spanData($masked, $dbSystem));
             }
             if ($explain !== null && $statement !== null && self::configuration()->explainSlowQueries) {
@@ -773,7 +773,7 @@ final class ForgeOpsTracker
             return $data;
         }
 
-        return QueryPlans::spanData(SqlStatement::maskForSpan($statement), $dbSystem, $data);
+        return QueryPlans::spanData(SqlStatement::maskForSpan($statement, $dbSystem), $dbSystem, $data);
     }
 
     private static function queryPlanner(): QueryPlanner

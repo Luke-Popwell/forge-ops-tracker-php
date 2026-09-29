@@ -25,9 +25,34 @@ final class SqlStatement
     private const MAX_NAME_LENGTH = 200;
     private const MAX_CAUSE_DEPTH = 5;
 
-    private const LITERAL = <<<'RE'
-        ~'(?:[^']|'')*(?:'|\z)|(?<tag>\$[A-Za-z_]*\$).*?(?:\k<tag>|\z)|(?<![\w$.])\d+(?:\.\d+)?(?!\w)~s
+    /** db.system values where "double quotes" are a string, not a name. */
+    private const DOUBLE_QUOTED_STRING_SYSTEMS = ['mysql', 'mariadb'];
+
+    // The prefix only counts as one when it isn't the end of a word, but the quote always does:
+    // LIKE'%x%', with no space, is still a string. A backslash can be the statement's last character
+    // ('secret\ cut off mid-escape), and the string is still masked to the end. A string's body is
+    // the Ruby original's (?:[^'\\]|\\(?:.|\z)|'')* unrolled into runs, which matches exactly the
+    // same text: PCRE's JIT keeps a backtracking point for every repetition, so the original form
+    // runs out of JIT stack on any string over about 8,000 characters, where this only does after
+    // about 5,000 escapes in one string. Either way preg_replace() then fails, and mask() returns
+    // null rather than anything unmasked.
+    private const STRING = <<<'RE'
+        (?:(?<![\w$])(?:[EeXxNnBb]|[Uu]&))?'[^'\\]*(?:(?:\\(?:.|\z)|'')[^'\\]*)*(?:'|\z)
         RE;
+    private const DOUBLE_QUOTED_STRING = <<<'RE'
+        "[^"\\]*(?:(?:\\(?:.|\z)|"")[^"\\]*)*(?:"|\z)
+        RE;
+    private const DOLLAR_QUOTED = <<<'RE'
+        (?<tag>\$[A-Za-z_]*\$).*?(?:\k<tag>|\z)
+        RE;
+    // [0-9A-Fa-f] where the Ruby original has \h: in PCRE, \h is horizontal whitespace.
+    private const NUMBER = <<<'RE'
+        (?<![\w$.])(?:0[xX][0-9A-Fa-f]+|0[bB][01]+|(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?)(?!\w)
+        RE;
+
+    private const LITERAL = '~' . self::STRING . '|' . self::DOLLAR_QUOTED . '|' . self::NUMBER . '~s';
+    private const LITERAL_WITH_DOUBLE_QUOTES = '~' . self::STRING . '|' . self::DOUBLE_QUOTED_STRING . '|'
+        . self::DOLLAR_QUOTED . '|' . self::NUMBER . '~s';
 
     private const PART = '(?:[\w$#@]+|"[^"]+"|\[[^\]]+\]|`[^`]+`)';
     private const NAME = self::PART . '(?:\.' . self::PART . ')*';
@@ -91,12 +116,18 @@ final class SqlStatement
         return null;
     }
 
-    public static function mask(?string $statement): ?string
+    /**
+     * $statement with every string and number replaced by "?", or null when it's blank. Pass the
+     * query's db.system as $system when it's known: on "mysql" and "mariadb", "double quotes" are a
+     * string too, so they're masked there and left alone everywhere else.
+     */
+    public static function mask(?string $statement, ?string $system = null): ?string
     {
         if ($statement === null || trim($statement) === '') {
             return null;
         }
-        $masked = preg_replace(self::LITERAL, self::MASK, $statement);
+        $doubleQuotes = $system !== null && in_array(strtolower($system), self::DOUBLE_QUOTED_STRING_SYSTEMS, true);
+        $masked = preg_replace($doubleQuotes ? self::LITERAL_WITH_DOUBLE_QUOTES : self::LITERAL, self::MASK, $statement);
         if ($masked === null) {
             return null;
         }
@@ -106,11 +137,13 @@ final class SqlStatement
 
     /**
      * The masked statement a database span carries as "db.statement": mask() above, capped at
-     * exactly MAX_LENGTH characters. null for a missing or blank statement.
+     * exactly MAX_LENGTH characters. null for a missing or blank statement. $dbSystem is the
+     * span's driver or db.system name, passed on to mask() (normalized the way QueryPlans::dbSystem()
+     * does it).
      */
-    public static function maskForSpan(?string $statement): ?string
+    public static function maskForSpan(?string $statement, ?string $dbSystem = null): ?string
     {
-        $masked = self::mask($statement);
+        $masked = self::mask($statement, QueryPlans::dbSystem($dbSystem));
 
         return $masked === null ? null : substr($masked, 0, self::MAX_LENGTH);
     }

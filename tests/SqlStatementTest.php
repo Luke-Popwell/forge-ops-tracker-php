@@ -7,6 +7,7 @@ namespace ForgeOps\Tracker\Tests;
 use ForgeOps\Tracker\Configuration;
 use ForgeOps\Tracker\EventBuilder;
 use ForgeOps\Tracker\SqlStatement;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
@@ -82,6 +83,59 @@ final class SqlStatementTest extends TestCase
         self::assertSame('EXEC sp_x @t = ?', SqlStatement::mask("EXEC sp_x @t = 'it''s'"));
         self::assertSame('SELECT ? WHERE n = ?', SqlStatement::mask("SELECT 1 WHERE n = 'oops"));
         self::assertSame('DO ?', SqlStatement::mask('DO $b$ BEGIN PERFORM 1; END $b$'));
+    }
+
+    /**
+     * The server's canonical masking cases (statement, db.system, expected), copied in whole so
+     * every SDK's port is checked against exactly the same set.
+     *
+     * @return list<array{string, ?string, string}>
+     */
+    public static function serverCases(): array
+    {
+        return [
+            ['SELECT * FROM orders WHERE email = \'a@b.co\' AND id = 42 LIMIT 10', null, 'SELECT * FROM orders WHERE email = ? AND id = ? LIMIT ?'],
+            ['EXEC sp_note @text = \'it\'\'s broken\'', null, 'EXEC sp_note @text = ?'],
+            ['SELECT 1 WHERE name = \'unterminated', null, 'SELECT ? WHERE name = ?'],
+            ['DO $body$ BEGIN PERFORM 1; END $body$', null, 'DO ?'],
+            ['SELECT "user id" FROM orders2 WHERE id = $1 AND v = sp_v2(?)', null, 'SELECT "user id" FROM orders2 WHERE id = $1 AND v = sp_v2(?)'],
+            ['SELECT price * 1.5 FROM t', null, 'SELECT price * ? FROM t'],
+            ['SELECT * FROM users WHERE name = E\'o\\\'brien\' AND id = 1', null, 'SELECT * FROM users WHERE name = ? AND id = ?'],
+            ['SELECT * FROM users WHERE name = \'o\\\'brien\' AND id = 1', null, 'SELECT * FROM users WHERE name = ? AND id = ?'],
+            ['SELECT * FROM t WHERE b = X\'DEADBEEF\' AND s = N\'uni\' AND u = U&\'d\\0061t\' AND e = e\'x\'', null, 'SELECT * FROM t WHERE b = ? AND s = ? AND u = ? AND e = ?'],
+            ['SELECT * FROM t WHERE a LIKE\'%secret%\'', null, 'SELECT * FROM t WHERE a LIKE?'],
+            ['SELECT * FROM t WHERE f = 0x1F AND b = 0b101 AND n = 3e10 AND m = 1.5E-3 AND k = .5', null, 'SELECT * FROM t WHERE f = ? AND b = ? AND n = ? AND m = ? AND k = ?'],
+            ['SELECT e, t.col, 1e5e FROM t', null, 'SELECT e, t.col, 1e5e FROM t'],
+            ['SELECT "user id" FROM t WHERE token = "abc123secret"', 'mysql', 'SELECT ? FROM t WHERE token = ?'],
+            ['SELECT "user id" FROM t WHERE token = "abc123secret"', 'MariaDB', 'SELECT ? FROM t WHERE token = ?'],
+            ['SELECT "user id" FROM t WHERE token = "abc123secret"', 'postgresql', 'SELECT "user id" FROM t WHERE token = "abc123secret"'],
+            ['SELECT "user id" FROM t WHERE token = "abc123secret"', null, 'SELECT "user id" FROM t WHERE token = "abc123secret"'],
+            ['SELECT * FROM t WHERE a = \'x\' AND b = 9', null, 'SELECT * FROM t WHERE a = ? AND b = ?'],
+            ['SELECT * FROM t WHERE a = ? AND b = ?', null, 'SELECT * FROM t WHERE a = ? AND b = ?'],
+            ['SELECT * FROM t WHERE path = \'C:\\\\dir\\\\\' AND n = 5', null, 'SELECT * FROM t WHERE path = ? AND n = ?'],
+            ['INSERT INTO t (a, b) VALUES (-5, +3.25e+2)', null, 'INSERT INTO t (a, b) VALUES (-?, +?)'],
+            ['SELECT * FROM t WHERE a = \'secret\\', null, 'SELECT * FROM t WHERE a = ?'],
+            ['SELECT * FROM t WHERE a = "secret\\', 'mysql', 'SELECT * FROM t WHERE a = ?'],
+        ];
+    }
+
+    #[DataProvider('serverCases')]
+    public function testMasksExactlyAsTheServerDoes(string $statement, ?string $system, string $expected): void
+    {
+        self::assertSame($expected, SqlStatement::mask($statement, $system));
+        self::assertSame($expected, SqlStatement::mask($expected, $system));
+    }
+
+    public function testMasksAStringLongerThanTheJitStackWouldAllowInItsOriginalForm(): void
+    {
+        self::assertSame('SELECT ? AND n = ?', SqlStatement::mask("SELECT '" . str_repeat('a', 100000) . "' AND n = 5"));
+        self::assertSame('SELECT ? FROM t', SqlStatement::mask('SELECT "' . str_repeat('xy', 50000) . '" FROM t', 'mysql'));
+    }
+
+    public function testMaskForSpanPassesTheDriverOnAsTheDbSystem(): void
+    {
+        self::assertSame('SELECT ? FROM t', SqlStatement::maskForSpan('SELECT "secret" FROM t', ' MariaDB '));
+        self::assertSame('SELECT "id" FROM t', SqlStatement::maskForSpan('SELECT "id" FROM t', 'pgsql'));
     }
 
     public function testIsIdempotentTruncatesAndReturnsNullForBlank(): void
