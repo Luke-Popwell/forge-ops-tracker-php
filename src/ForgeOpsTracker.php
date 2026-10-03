@@ -56,6 +56,9 @@ final class ForgeOpsTracker
     private static ?\WeakMap $snapshots = null;
     private static bool $exceptionHandlerInstalled = false;
 
+    /** Whether init() already logged the "Not sending" warning; see warnIfEnvironmentDisabled(). */
+    private static bool $environmentWarningLogged = false;
+
     /**
      * The affected user set via setUser() below, if any. A plain static property, not a thread-
      * local the way gems/forge_ops_tracker's own equivalent needs to be: PHP-FPM's shared-
@@ -188,6 +191,8 @@ final class ForgeOpsTracker
         if ($explainThresholdMs !== null) {
             $configuration->explainThresholdMs = $explainThresholdMs;
         }
+
+        self::warnIfEnvironmentDisabled($configuration);
 
         if ($installExceptionHandler ?? true) {
             self::installExceptionHandler();
@@ -864,12 +869,52 @@ final class ForgeOpsTracker
     }
 
     /**
+     * Logs one warning when a DSN is set but the environment isn't enabled, so a host that would
+     * send nothing says so at startup instead of staying silent. Goes to the configured logger, or
+     * error_log() (stderr on the CLI) when there isn't one. Never logs without a DSN.
+     *
+     * Once per process. Under a web SAPI every request starts with fresh static state, so a small
+     * marker file in the system temp directory (the same approach ChangeSnapshot takes) keeps it to
+     * once a day per DSN and environment instead of once per request.
+     */
+    private static function warnIfEnvironmentDisabled(Configuration $configuration): void
+    {
+        $message = $configuration->disabledEnvironmentWarning();
+        if ($message === null || self::$environmentWarningLogged) {
+            return;
+        }
+        self::$environmentWarningLogged = true;
+
+        if (PHP_SAPI !== 'cli' && PHP_SAPI !== 'phpdbg') {
+            $key = substr(sha1($configuration->dsn . '|' . $configuration->environment . '|'
+                . implode(',', $configuration->enabledEnvironments)), 0, 12);
+            $marker = sys_get_temp_dir() . '/forge-ops-tracker-environment-warning-' . $key;
+            $writtenAt = @filemtime($marker);
+            if ($writtenAt !== false && $writtenAt > time() - 86400) {
+                return;
+            }
+            @touch($marker);
+        }
+
+        if ($configuration->logger !== null) {
+            $configuration->log($message);
+        } else {
+            error_log($message);
+        }
+    }
+
+    /**
      * Reports anything that would otherwise crash the script outright (a
      * plain CLI script, an Artisan/Symfony console command) with no
      * further wiring: the same "unhandled needs no wiring" case the
      * Laravel/Symfony integrations cover for web requests. Still calls
      * whatever handler was already installed afterward, so it never
-     * changes program behavior. This does *not* catch a web request's
+     * changes program behavior. With no handler before it, it rethrows:
+     * an exception thrown from an exception handler is fatal, so PHP
+     * prints its usual "PHP Fatal error:  Uncaught ..." (wherever
+     * display_errors/log_errors send it) and exits with status 255, the
+     * same as if this handler had never been installed. Shutdown
+     * functions still run, so the event queued above is still sent. This does *not* catch a web request's
      * unhandled exception under a real app server: Laravel/Symfony
      * catch that themselves, long before it would ever reach here, which
      * is what those integrations are for.
@@ -885,7 +930,10 @@ final class ForgeOpsTracker
             self::captureException($e);
             if (self::$previousExceptionHandler !== null) {
                 (self::$previousExceptionHandler)($e);
+                return;
             }
+
+            throw $e;
         });
     }
 
@@ -918,6 +966,7 @@ final class ForgeOpsTracker
         self::$request = null;
         self::$snapshots = null;
         self::$exceptionHandlerInstalled = false;
+        self::$environmentWarningLogged = false;
         self::$previousExceptionHandler = null;
         self::$currentUser = null;
         self::$breadcrumbs = null;

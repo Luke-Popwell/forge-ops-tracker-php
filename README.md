@@ -29,6 +29,12 @@ ForgeOpsTracker::init(
 );
 ```
 
+The environment comes from `environment:`, then `FORGE_OPS_ENVIRONMENT`, then `APP_ENV` (Symfony's
+`prod` and `dev` are read as `production` and `development`), and is `production` when none is set.
+Only `production` and `staging` send by default (`enabledEnvironments`), so a Laravel app with
+`APP_ENV=local` or a Symfony app with `APP_ENV=dev` doesn't report. When a DSN is set but the
+environment isn't enabled, `init()` logs one warning saying so (to your `logger`, or `error_log()`).
+
 ### Laravel
 
 ```php
@@ -106,7 +112,8 @@ catch (CardException $e) {
 (`installExceptionHandler: false` to opt out), which reports anything that crashes the script
 outright with no wiring needed: the same "unhandled needs no wiring" case the Laravel/Symfony
 integrations cover for web requests. It still calls whatever handler was already installed
-afterward, so it never changes program behavior. This does **not** catch a web request's unhandled
+afterward, so it never changes program behavior; with no handler before it, PHP still prints its
+usual "PHP Fatal error:  Uncaught ..." and exits with status 255. This does **not** catch a web request's unhandled
 exception under a real app server: Laravel/Symfony catch that themselves, long before it would
 ever reach here.
 
@@ -313,7 +320,7 @@ own sample (`request_count: 1`, `duration_sum_ms`/`max_duration_ms` both the one
 duration), deferred the same way past the response.
 
 Requires a ForgeOps plan that includes performance monitoring; on a plan that doesn't, the reports
-are simply rejected server-side and dropped, exactly like any other delivery failure.
+are accepted but not recorded, and the response says why.
 
 ### Database queries and queue jobs (Laravel)
 
@@ -587,8 +594,8 @@ like `HOSTNAME`, `PATH`, `PORT`, `LC_*`, and Kubernetes service variables, are l
 client's own `FORGE_OPS_*` settings. Under PHP-FPM these are the pool's variables, which
 `clear_env` empties by default.
 
-Requires a ForgeOps plan that includes change tracking; on a plan that doesn't, both are rejected
-server-side and dropped, exactly like any other delivery failure.
+Requires a ForgeOps plan that includes change tracking; on a plan that doesn't, both are accepted but not recorded,
+and the response says why.
 
 ## Database errors
 

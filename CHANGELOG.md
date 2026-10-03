@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.0 (2026-10-02)
+
+- Changed: the environment now defaults to `production` when nothing sets it (it was `development`). It comes from `environment:`, then `FORGE_OPS_ENVIRONMENT`, then `APP_ENV` (Laravel's and Symfony's own setting; Symfony's `prod` and `dev` are read as `production` and `development`), then `production`. Only `production` and `staging` send by default, so before this a host that set just a DSN, as the setup instructions show, sent nothing at all. To keep the old behavior where nothing sets `APP_ENV`, set `FORGE_OPS_ENVIRONMENT=development` (or pass `environment: 'development'` to `init()`). Note that a Symfony app with `APP_ENV=prod` now reports as `production` and sends.
+- `init()` now logs one warning when a DSN is set but the environment isn't in `enabledEnvironments`, naming the environment and how to send from it. It goes to your `logger`, or `error_log()` (stderr on the CLI) when there isn't one. Under PHP-FPM it's logged at most once a day per DSN and environment rather than on every request. Nothing is logged when no DSN is set.
+- Fixed: an uncaught exception in a script with no exception handler of its own was reported but then swallowed, so PHP's "PHP Fatal error:  Uncaught ..." message never printed and the process exited with status 0 (a failing cron job looked successful). It now prints and exits with status 255, as it would without ForgeOps, and the event is still sent.
+
 ## 0.7.0 (2026-09-29)
 
 - SQL masking now also catches strings with a backslash-escaped quote (`'o\'brien'`, `E'o\'brien'`), prefixed strings (`E''`, `X''`, `N''`, `B''`, `U&''`, prefix included), hex, binary and exponent numbers (`0x1F`, `0b101`, `3e10`, `1.5E-3`, `.5`), and, on MySQL and MariaDB, `"double-quoted"` strings. `SqlStatement::mask()` and `maskForSpan()` take an optional database system, and database spans (including the `dbSystem:` argument to `span()` and `recordSpan()`) and EXPLAIN plans pass theirs. A quoted string longer than about 8,000 characters no longer makes the statement get dropped.

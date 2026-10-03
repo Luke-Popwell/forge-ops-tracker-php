@@ -164,7 +164,7 @@ final class Configuration
     public function __construct()
     {
         $this->dsn = getenv('FORGE_OPS_DSN') ?: null;
-        $this->environment = getenv('FORGE_OPS_ENVIRONMENT') ?: 'development';
+        $this->environment = self::resolveEnvironment();
         $this->release = getenv('FORGE_OPS_RELEASE') ?: null;
         $this->serverName = gethostname() ?: null;
         $this->appRoot = getcwd() ?: '';
@@ -334,9 +334,75 @@ final class Configuration
 
     public function isEnabled(): bool
     {
-        return $this->dsn !== null && $this->dsn !== ''
-            && $this->apiKey() !== null
-            && in_array($this->environment, $this->enabledEnvironments, true);
+        return $this->isConfigured() && in_array($this->environment, $this->enabledEnvironments, true);
+    }
+
+    /** Whether a usable DSN is set, regardless of environment. */
+    public function isConfigured(): bool
+    {
+        return $this->dsn !== null && $this->dsn !== '' && $this->apiKey() !== null;
+    }
+
+    /**
+     * The one-line warning init() logs when a DSN is set but this environment isn't one that sends,
+     * or null when there's nothing to warn about (no DSN, or the environment is enabled).
+     */
+    public function disabledEnvironmentWarning(): ?string
+    {
+        if (!$this->isConfigured() || in_array($this->environment, $this->enabledEnvironments, true)) {
+            return null;
+        }
+
+        $enabled = $this->enabledEnvironments === [] ? 'none' : implode(', ', $this->enabledEnvironments);
+
+        return sprintf(
+            '[ForgeOps] Not sending: this environment is "%s", and only %s are enabled. Set '
+            . 'FORGE_OPS_ENVIRONMENT=production (or add "%s" to enabledEnvironments) to send from here.',
+            $this->environment,
+            $enabled,
+            $this->environment,
+        );
+    }
+
+    /**
+     * FORGE_OPS_ENVIRONMENT, then APP_ENV (Laravel's and Symfony's own setting, with Symfony's
+     * "prod" and "dev" read as "production" and "development"), then "production". Defaulting to
+     * "production" means a host that only sets a DSN actually sends; a development machine opts out
+     * through APP_ENV (Laravel's "local", Symfony's "dev") or FORGE_OPS_ENVIRONMENT, and init() logs
+     * one warning saying so.
+     */
+    public static function resolveEnvironment(): string
+    {
+        $explicit = self::env('FORGE_OPS_ENVIRONMENT');
+        if ($explicit !== null) {
+            return $explicit;
+        }
+
+        $framework = self::env('APP_ENV');
+        if ($framework !== null) {
+            return match ($framework) {
+                'prod' => 'production',
+                'dev' => 'development',
+                default => $framework,
+            };
+        }
+
+        return 'production';
+    }
+
+    /**
+     * An environment variable from getenv(), or from $_ENV/$_SERVER where a dotenv loader that
+     * doesn't call putenv() (Symfony's Dotenv by default) put it. Empty counts as unset.
+     */
+    private static function env(string $name): ?string
+    {
+        foreach ([getenv($name), $_ENV[$name] ?? null, $_SERVER[$name] ?? null] as $value) {
+            if (is_string($value) && $value !== '') {
+                return $value;
+            }
+        }
+
+        return null;
     }
 
     public function log(string $message): void
