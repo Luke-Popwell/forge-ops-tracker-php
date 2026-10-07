@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.8.1 (2026-10-07)
+
+- The package now ships the text of its MIT licence (`LICENSE.txt`); `composer.json` already declared it. No code changes.
+
 ## 0.8.0 (2026-10-02)
 
 - Changed: the environment now defaults to `production` when nothing sets it (it was `development`). It comes from `environment:`, then `FORGE_OPS_ENVIRONMENT`, then `APP_ENV` (Laravel's and Symfony's own setting; Symfony's `prod` and `dev` are read as `production` and `development`), then `production`. Only `production` and `staging` send by default, so before this a host that set just a DSN, as the setup instructions show, sent nothing at all. To keep the old behavior where nothing sets `APP_ENV`, set `FORGE_OPS_ENVIRONMENT=development` (or pass `environment: 'development'` to `init()`). Note that a Symfony app with `APP_ENV=prod` now reports as `production` and sends.
