@@ -537,10 +537,12 @@ exactly that). Call `flushMetrics()` if it might exit another way. Every entry i
 captured (a signup is a row, not a running total), so a count or sum you compute later is exact. Both
 are a no-op when the client isn't enabled for the environment.
 
-A failed delivery keeps every entry for a later `flushMetrics()` (which matters to a long-running
-worker; a normal request's shutdown flush is its only one). The buffer holds at most 1000 entries per
-kind and drops further ones once full, since a plan without the feature rejects every flush and a
-worker would otherwise grow it without bound. A NaN or infinite value is dropped at capture:
+A delivery that fails for now (a network error, a timeout, a 5xx, a 408 or a 429) keeps every entry
+for a later `flushMetrics()` (which matters to a long-running worker; a normal request's shutdown
+flush is its only one). A batch the server rejects (any other 4xx, such as the 403 a plan without the
+feature answers) is dropped rather than sent again, and so is one that has failed 5 flushes in a row.
+The buffer holds at most 1000 entries per kind and drops further ones once full, so a worker cannot
+grow it without bound. A NaN or infinite value is dropped at capture:
 `json_encode` fails on one, which would make the whole batch fail to send. Requires a ForgeOps plan
 that includes custom metrics / infrastructure monitoring.
 

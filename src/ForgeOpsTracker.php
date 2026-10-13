@@ -481,8 +481,18 @@ final class ForgeOpsTracker
         if (self::$metricBuffer === null) {
             $configuration = self::configuration();
             $client = new Client($configuration);
-            self::$metricBuffer = new MetricBuffer($configuration, [$client, 'deliverMetrics']);
-            self::$infrastructureMetricBuffer = new MetricBuffer($configuration, [$client, 'deliverInfrastructureMetrics']);
+            // The status, not deliverMetrics()'s own bool: the buffer drops a rejected batch but
+            // keeps one that only failed for now, which a bare false cannot tell apart.
+            self::$metricBuffer = new MetricBuffer($configuration, static function (array $entries) use ($client): string {
+                $client->deliverMetrics($entries);
+
+                return $client->lastStatus();
+            });
+            self::$infrastructureMetricBuffer = new MetricBuffer($configuration, static function (array $entries) use ($client): string {
+                $client->deliverInfrastructureMetrics($entries);
+
+                return $client->lastStatus();
+            });
         }
 
         return [self::$metricBuffer, self::$infrastructureMetricBuffer];

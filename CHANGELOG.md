@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.9.0 (2026-10-13)
+
+- Fixed: in a long-running process (a queue worker, a daemon), a batch of custom or infrastructure metrics the server refused was re-sent at every flush for as long as the process lived, with everything captured since added to it, and once 1000 entries had built up behind it every new metric was dropped too. A batch is now dropped when the server answers with a 4xx other than 408 or 429 (a 400, 401, 403, 413 or 422, for example), since sending it again can only fail the same way.
+- A metric batch that could not be delivered for now (a network error, a timeout, a 5xx, a 408 or a 429) is still kept for the next flush, but only for 5 flushes in a row. After the fifth it is dropped and the buffer starts clean. Error events, traces, session check-ins and performance samples were already sent once and never re-sent; that is unchanged.
+- With a `logger`, a dropped metric batch is logged once with how many entries were dropped and why, and any 4xx or 5xx answer is logged with its status code and whether it will be retried.
+- New `Client::lastStatus()` returns `delivered`, `rejected` or `failed` (the `DeliveryStatus` constants) for the client's most recent attempt. Every `Client::deliver*()` method still returns the same `bool`.
+
 ## 0.8.1 (2026-10-07)
 
 - The package now ships the text of its MIT licence (`LICENSE.txt`); `composer.json` already declared it. No code changes.

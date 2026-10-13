@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace ForgeOps\Tracker\Tests;
 
 use ForgeOps\Tracker\Configuration;
+use ForgeOps\Tracker\DeliveryStatus;
 use ForgeOps\Tracker\ForgeOpsTracker;
 use ForgeOps\Tracker\MetricBuffer;
 use PHPUnit\Framework\TestCase;
@@ -117,6 +118,137 @@ final class MetricBufferTest extends TestCase
         $buffer->flush(); // nothing left: no third delivery
 
         self::assertSame([['a'], ['a', 'b']], $delivered);
+    }
+
+    public function testABatchTheServerRejectedIsDroppedAndNeverSentAgain(): void
+    {
+        $delivered = [];
+        $logged = [];
+        $config = $this->configuration();
+        $config->logger = function (string $message) use (&$logged): void {
+            $logged[] = $message;
+        };
+        $buffer = new MetricBuffer($config, function (array $entries) use (&$delivered): string {
+            $delivered[] = array_column($entries, 'metric_name');
+
+            return DeliveryStatus::REJECTED;
+        });
+
+        $buffer->record(['metric_name' => 'a', 'value' => 1.0]);
+        $buffer->flush();
+        self::assertSame(0, $buffer->count());
+        $buffer->flush(); // nothing left: no second delivery of the rejected batch
+        $buffer->record(['metric_name' => 'b', 'value' => 2.0]);
+        $buffer->flush();
+
+        self::assertSame([['a'], ['b']], $delivered);
+        self::assertSame(
+            '[forge-ops-tracker] dropping 1 buffered metrics: the server rejected them and will not accept a retry',
+            $logged[0]
+        );
+        self::assertCount(2, $logged);
+    }
+
+    public function testABatchIsKeptThroughFourFailedFlushesAndDroppedOnTheFifth(): void
+    {
+        $attempts = 0;
+        $logged = [];
+        $config = $this->configuration();
+        $config->logger = function (string $message) use (&$logged): void {
+            $logged[] = $message;
+        };
+        $buffer = new MetricBuffer($config, function (array $entries) use (&$attempts): string {
+            $attempts++;
+
+            return DeliveryStatus::FAILED;
+        });
+
+        $buffer->record(['metric_name' => 'a', 'value' => 1.0]);
+        for ($i = 0; $i < 4; $i++) {
+            $buffer->flush();
+        }
+        self::assertSame(1, $buffer->count());
+        self::assertSame([], $logged);
+
+        $buffer->flush();
+        self::assertSame(0, $buffer->count());
+        $buffer->flush(); // nothing left to send
+
+        self::assertSame(5, $attempts);
+        self::assertSame(['[forge-ops-tracker] dropping 1 buffered metrics: 5 flushes in a row failed'], $logged);
+    }
+
+    public function testAFlushThatGetsThroughStartsTheCountOfFailedFlushesAgain(): void
+    {
+        $outcomes = [false, false, false, false, true, false, false, false, false];
+        $buffer = new MetricBuffer($this->configuration(), function (array $entries) use (&$outcomes): bool {
+            return array_shift($outcomes) ?? true;
+        });
+
+        $buffer->record(['metric_name' => 'a', 'value' => 1.0]);
+        for ($i = 0; $i < 5; $i++) {
+            $buffer->flush();
+        }
+        self::assertSame(0, $buffer->count());
+
+        $buffer->record(['metric_name' => 'b', 'value' => 2.0]);
+        for ($i = 0; $i < 4; $i++) {
+            $buffer->flush();
+        }
+
+        // Four failures since the flush that got through, so "b" is still held, not dropped.
+        self::assertSame(1, $buffer->count());
+        $buffer->flush();
+        self::assertSame(0, $buffer->count());
+    }
+
+    public function testAThrowingDeliveryCountsAsAFailedFlushLikeAnyOther(): void
+    {
+        $buffer = new MetricBuffer($this->configuration(), function (array $entries): bool {
+            throw new \RuntimeException('boom');
+        });
+        $buffer->record(['metric_name' => 'a', 'value' => 1.0]);
+        for ($i = 0; $i < 5; $i++) {
+            $buffer->flush();
+        }
+
+        self::assertSame(0, $buffer->count());
+    }
+
+    public function testCaptureMetricDropsABatchThePlanRejectsButKeepsOneTheServerFailedOnEndToEnd(): void
+    {
+        ForgeOpsTracker::init(
+            dsn: 'http://key@127.0.0.1:' . self::PORT . '/rejecting/api/v1/events',
+            environment: 'production',
+            enabledEnvironments: ['production'],
+            installExceptionHandler: false,
+            detectChanges: false,
+        );
+        ForgeOpsTracker::captureMetric('first');
+        ForgeOpsTracker::flushMetrics();
+        ForgeOpsTracker::captureMetric('second');
+        ForgeOpsTracker::flushMetrics();
+        ForgeOpsTracker::resetForTesting();
+
+        ForgeOpsTracker::init(
+            dsn: 'http://key@127.0.0.1:' . self::PORT . '/failing/api/v1/events',
+            environment: 'production',
+            enabledEnvironments: ['production'],
+            installExceptionHandler: false,
+            detectChanges: false,
+        );
+        ForgeOpsTracker::captureMetric('third');
+        ForgeOpsTracker::flushMetrics();
+        ForgeOpsTracker::captureMetric('fourth');
+        ForgeOpsTracker::flushMetrics();
+        // Nothing may be left for the shutdown flush to send once this test's server is gone.
+        ForgeOpsTracker::resetForTesting();
+
+        $sent = array_map(
+            static fn (string $line): array => array_column(json_decode($line, true)['body']['metrics'], 'metric_name'),
+            array_values(array_filter(explode("\n", (string) file_get_contents(self::$requestFile))))
+        );
+        self::assertSame([['first'], ['second'], ['third'], ['third', 'fourth']], $sent);
     }
 
     public function testAThrowingDeliveryIsSwallowedAndKeepsTheEntries(): void

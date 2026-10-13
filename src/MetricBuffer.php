@@ -15,11 +15,13 @@ namespace ForgeOps\Tracker;
  * class twice; here it is one class instantiated twice, told which delivery function to use.
  *
  * Differences from the Ruby buffers: the buffer is capped at MAX_ENTRIES and drops further entries
- * once full (a plan without the feature answers 403 on every flush, and a long-running CLI worker
- * would otherwise grow the buffer without bound), and a NaN or infinite value is dropped at record
+ * once full (an unreachable server fails every flush, and a long-running CLI worker would otherwise
+ * grow the buffer until the batch is given up on), and a NaN or infinite value is dropped at record
  * time (json_encode fails on one, and one bad entry would make the whole batch fail to send). A
- * failed delivery keeps every entry for the next flush(), which matters for a long-running worker;
- * a normal request's shutdown flush is its only one.
+ * delivery that failed for now keeps every entry for the next flush(), which matters for a
+ * long-running worker; a normal request's shutdown flush is its only one. A batch the server
+ * rejected, or one that failed DeliveryStatus::MAX_FAILED_FLUSHES flushes in a row, is dropped:
+ * see DeliveryStatus.
  */
 class MetricBuffer
 {
@@ -30,7 +32,12 @@ class MetricBuffer
     /** @var array<int, array<string, mixed>> */
     private array $entries = [];
 
-    /** @param callable(array<int, array<string, mixed>>): bool $deliver */
+    private int $failedFlushes = 0;
+
+    /**
+     * @param callable(array<int, array<string, mixed>>): (bool|string) $deliver answers a
+     *     DeliveryStatus constant; a plain true/false is still read as delivered/failed for now
+     */
     public function __construct(
         private Configuration $configuration,
         private $deliver,
@@ -63,7 +70,10 @@ class MetricBuffer
         return true;
     }
 
-    /** Delivers everything buffered so far as one batch. A failed delivery keeps every entry. */
+    /**
+     * Delivers everything buffered so far as one batch. A delivery that failed for now keeps every
+     * entry; a rejected batch, or the DeliveryStatus::MAX_FAILED_FLUSHES-th failure in a row, drops it.
+     */
     public function flush(): void
     {
         if ($this->entries === []) {
@@ -72,16 +82,30 @@ class MetricBuffer
 
         $snapshot = $this->entries;
         try {
-            $delivered = ($this->deliver)($snapshot);
+            $status = DeliveryStatus::from(($this->deliver)($snapshot));
         } catch (\Throwable $e) {
             $this->configuration->log('[forge-ops-tracker] metric flush error: ' . get_class($e) . ': ' . $e->getMessage());
+            $status = DeliveryStatus::FAILED;
+        }
 
-            return;
+        if ($status === DeliveryStatus::REJECTED) {
+            $this->configuration->log(
+                '[forge-ops-tracker] dropping ' . count($snapshot) . ' buffered metrics: the server rejected them and will not accept a retry'
+            );
+        } elseif ($status === DeliveryStatus::FAILED) {
+            $this->failedFlushes++;
+            if ($this->failedFlushes < DeliveryStatus::MAX_FAILED_FLUSHES) {
+                return;
+            }
+            $this->configuration->log(
+                '[forge-ops-tracker] dropping ' . count($snapshot) . ' buffered metrics: '
+                . DeliveryStatus::MAX_FAILED_FLUSHES . ' flushes in a row failed'
+            );
         }
-        if ($delivered) {
-            // Exactly the entries just delivered, not the whole list.
-            $this->entries = array_slice($this->entries, count($snapshot));
-        }
+
+        $this->failedFlushes = 0;
+        // Exactly the entries just sent, not the whole list.
+        $this->entries = array_slice($this->entries, count($snapshot));
     }
 
     /** @return int how many entries are currently buffered */

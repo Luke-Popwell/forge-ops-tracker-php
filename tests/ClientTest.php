@@ -6,6 +6,8 @@ namespace ForgeOps\Tracker\Tests;
 
 use ForgeOps\Tracker\Client;
 use ForgeOps\Tracker\Configuration;
+use ForgeOps\Tracker\DeliveryStatus;
+use PHPUnit\Framework\Attributes\DataProvider;
 use PHPUnit\Framework\TestCase;
 
 final class ClientTest extends TestCase
@@ -76,6 +78,56 @@ final class ClientTest extends TestCase
         $client = new Client($this->configuration('unauthorized'));
 
         self::assertFalse($client->deliver(['exception_class' => 'RuntimeError']));
+    }
+
+    /** @return array<string, array{0: int, 1: string}> */
+    public static function statusCodes(): array
+    {
+        return [
+            '202 is delivered' => [202, DeliveryStatus::DELIVERED],
+            '400 is rejected' => [400, DeliveryStatus::REJECTED],
+            '401 is rejected' => [401, DeliveryStatus::REJECTED],
+            '403 is rejected' => [403, DeliveryStatus::REJECTED],
+            '413 is rejected' => [413, DeliveryStatus::REJECTED],
+            '422 is rejected' => [422, DeliveryStatus::REJECTED],
+            '408 is failed for now' => [408, DeliveryStatus::FAILED],
+            '429 is failed for now' => [429, DeliveryStatus::FAILED],
+            '500 is failed for now' => [500, DeliveryStatus::FAILED],
+            '503 is failed for now' => [503, DeliveryStatus::FAILED],
+        ];
+    }
+
+    #[DataProvider('statusCodes')]
+    public function testLastStatusTellsARejectionFromAFailureWorthRetrying(int $code, string $expected): void
+    {
+        $client = new Client($this->configuration('status/' . $code));
+
+        self::assertSame($expected === DeliveryStatus::DELIVERED, $client->deliver(['exception_class' => 'RuntimeError']));
+        self::assertSame($expected, $client->lastStatus());
+    }
+
+    public function testLastStatusIsFailedForNowWhenTheServerIsUnreachable(): void
+    {
+        $config = new Configuration();
+        $config->dsn = 'http://secret-key@127.0.0.1:1/api/v1/events'; // nothing listens on port 1
+        $config->timeout = 1.0;
+        $client = new Client($config);
+
+        self::assertFalse($client->deliverMetrics([['metric_name' => 'signup', 'value' => 1.0]]));
+        self::assertSame(DeliveryStatus::FAILED, $client->lastStatus());
+    }
+
+    public function testSaysWhyADeliveryWasNotAccepted(): void
+    {
+        $logged = [];
+        $config = $this->configuration('status/422');
+        $config->logger = function (string $message) use (&$logged): void {
+            $logged[] = $message;
+        };
+
+        (new Client($config))->deliver(['exception_class' => 'RuntimeError']);
+
+        self::assertSame(['[forge-ops-tracker] delivery rejected: HTTP 422, the server will not accept a retry'], $logged);
     }
 
     public function testReturnsFalseWithoutThrowingWhenTheServerIsUnreachable(): void

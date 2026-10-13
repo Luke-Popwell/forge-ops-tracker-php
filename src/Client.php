@@ -12,6 +12,10 @@ namespace ForgeOps\Tracker;
  * unreachable tracker must never be able to break the host app. Ported
  * from gems/forge_ops_tracker/lib/forge_ops_tracker/client.rb.
  *
+ * Every deliver*() method answers true only when the payload was
+ * delivered. Whether a false is worth another attempt is lastStatus():
+ * see DeliveryStatus.
+ *
  * Uses ext-curl rather than a package dependency (Guzzle, etc.): same
  * reason the Ruby gem uses plain Net::HTTP and the Python client uses
  * only urllib: this has to work in any host app without adding an HTTP
@@ -20,61 +24,73 @@ namespace ForgeOps\Tracker;
  */
 class Client
 {
+    private string $lastStatus = DeliveryStatus::FAILED;
+
     public function __construct(private Configuration $configuration)
     {
+    }
+
+    /**
+     * The DeliveryStatus of the most recent deliver*() call on this client: what tells a caller
+     * holding a false whether the server rejected the payload for good or delivery only failed
+     * for now. One request runs at a time in a PHP process, so "most recent" is never ambiguous.
+     */
+    public function lastStatus(): string
+    {
+        return $this->lastStatus;
     }
 
     /** @param array<string, mixed> $payload */
     public function deliver(array $payload): bool
     {
-        return $this->post($this->configuration->ingestionUri(), $payload);
+        return $this->post($this->configuration->ingestionUri(), $payload) === DeliveryStatus::DELIVERED;
     }
 
     /** @param array<string, mixed> $payload */
     public function deliverSessionCheckin(array $payload): bool
     {
-        return $this->post($this->configuration->sessionCheckinsUri(), $payload);
+        return $this->post($this->configuration->sessionCheckinsUri(), $payload) === DeliveryStatus::DELIVERED;
     }
 
     /** @param array<int, array<string, mixed>> $samples */
     public function deliverPerformanceSamples(array $samples): bool
     {
-        return $this->post($this->configuration->performanceSamplesUri(), ['samples' => $samples]);
+        return $this->post($this->configuration->performanceSamplesUri(), ['samples' => $samples]) === DeliveryStatus::DELIVERED;
     }
 
     /** @param array<int, array<string, mixed>> $entries */
     public function deliverMetrics(array $entries): bool
     {
-        return $this->post($this->configuration->customMetricsUri(), ['metrics' => $entries]);
+        return $this->post($this->configuration->customMetricsUri(), ['metrics' => $entries]) === DeliveryStatus::DELIVERED;
     }
 
     /** @param array<int, array<string, mixed>> $entries */
     public function deliverInfrastructureMetrics(array $entries): bool
     {
-        return $this->post($this->configuration->infrastructureMetricsUri(), ['metrics' => $entries]);
+        return $this->post($this->configuration->infrastructureMetricsUri(), ['metrics' => $entries]) === DeliveryStatus::DELIVERED;
     }
 
     /** @param array<string, mixed> $trace `{"trace_id": ..., "spans": [...]}` */
     public function deliverSpans(array $trace): bool
     {
-        return $this->post($this->configuration->spansUri(), $trace);
+        return $this->post($this->configuration->spansUri(), $trace) === DeliveryStatus::DELIVERED;
     }
 
     /**
      * One ForgeOpsTracker::recordChange() call. A plan without change tracking answers 403, which
-     * is just a false here like any other non-2xx.
+     * is just a false here like any other non-2xx (with a lastStatus() of REJECTED).
      *
      * @param array<string, mixed> $payload
      */
     public function deliverChange(array $payload): bool
     {
-        return $this->post($this->configuration->changesUri(), $payload);
+        return $this->post($this->configuration->changesUri(), $payload) === DeliveryStatus::DELIVERED;
     }
 
     /** @param array<string, mixed> $payload see ChangeSnapshot::payload() */
     public function deliverChangeSnapshot(array $payload): bool
     {
-        return $this->post($this->configuration->changeSnapshotsUri(), $payload);
+        return $this->post($this->configuration->changeSnapshotsUri(), $payload) === DeliveryStatus::DELIVERED;
     }
 
     /**
@@ -85,26 +101,37 @@ class Client
      */
     public function deliverQueryPlan(array $payload): bool
     {
-        return $this->post($this->configuration->queryPlansUri(), $payload);
+        return $this->post($this->configuration->queryPlansUri(), $payload) === DeliveryStatus::DELIVERED;
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     *
+     * @return string one of the DeliveryStatus constants, also kept for lastStatus()
+     */
+    private function post(?string $uri, array $payload): string
+    {
+        return $this->lastStatus = $this->attempt($uri, $payload);
     }
 
     /** @param array<string, mixed> $payload */
-    private function post(?string $uri, array $payload): bool
+    private function attempt(?string $uri, array $payload): string
     {
         if ($uri === null) {
-            return false;
+            return DeliveryStatus::FAILED;
         }
 
         $body = json_encode($payload);
         if ($body === false) {
             $this->configuration->log('[forge-ops-tracker] delivery failed: could not encode payload as JSON');
 
-            return false;
+            // The same payload can never encode on a later attempt either.
+            return DeliveryStatus::REJECTED;
         }
 
         $ch = curl_init($uri);
         if ($ch === false) {
-            return false;
+            return DeliveryStatus::FAILED;
         }
 
         try {
@@ -125,16 +152,22 @@ class Client
             if ($result === false) {
                 $this->configuration->log('[forge-ops-tracker] delivery failed: ' . curl_error($ch));
 
-                return false;
+                return DeliveryStatus::FAILED;
             }
 
-            $status = curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $code = (int) curl_getinfo($ch, CURLINFO_RESPONSE_CODE);
+            $status = DeliveryStatus::forCode($code);
+            if ($status === DeliveryStatus::REJECTED) {
+                $this->configuration->log('[forge-ops-tracker] delivery rejected: HTTP ' . $code . ', the server will not accept a retry');
+            } elseif ($status === DeliveryStatus::FAILED) {
+                $this->configuration->log('[forge-ops-tracker] delivery failed: HTTP ' . $code);
+            }
 
-            return $status >= 200 && $status < 300;
+            return $status;
         } catch (\Throwable $e) {
             $this->configuration->log('[forge-ops-tracker] delivery failed: ' . get_class($e) . ': ' . $e->getMessage());
 
-            return false;
+            return DeliveryStatus::FAILED;
         }
         // No curl_close($ch): deprecated as of PHP 8.5 (verified
         // directly, not assumed): it's been a no-op since PHP 8.0, when
