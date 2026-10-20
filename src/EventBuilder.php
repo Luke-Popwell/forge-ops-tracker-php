@@ -44,6 +44,13 @@ class EventBuilder
      * ("GET /users/{id}"), and $traceId the request's 32-character lowercase hex W3C trace id,
      * which is also what links this error to errors other services reported for the same trace.
      * All three are null outside a request, and each is left out of the payload when null.
+     *
+     * With Configuration::$strictPrivacy on, the finished payload goes through
+     * StrictPrivacy::event(): the message is replaced by its message_fingerprint (computed from the
+     * message as it would otherwise have been sent, so after scrubPii, which is also what the server
+     * fingerprints from a client without strict privacy, and keeps a message holding an email
+     * grouping together), and breadcrumbs, endpoint, the SQL statement, source context, the user's
+     * email/username and every context/tag key not in $privacyAllowedFields are left out.
      */
     public function build(
         Throwable $throwable,
@@ -83,7 +90,11 @@ class EventBuilder
         }
         $payload = $this->attachSql($payload, $throwable);
 
-        return $this->configuration->scrubPii ? $this->scrub($payload) : $payload;
+        $payload = $this->configuration->scrubPii ? $this->scrub($payload) : $payload;
+
+        return $this->configuration->strictPrivacy
+            ? StrictPrivacy::event($payload, $this->configuration->privacyAllowedFields)
+            : $payload;
     }
 
     // See SqlStatement for what's read off the error and how it's masked. The statement itself only
@@ -104,7 +115,7 @@ class EventBuilder
         if ($objects !== null && $this->configuration->captureSqlObjects) {
             $payload['sql_objects'] = $objects;
         }
-        if ($this->configuration->captureSqlStatement) {
+        if ($this->configuration->captureSqlStatement && !$this->configuration->strictPrivacy) {
             $payload['sql_statement'] = $masked;
         }
 
@@ -215,14 +226,15 @@ class EventBuilder
      * off). Best-effort: any file that can't be read (deleted, permission
      * denied, a path that only ever existed inside a build step and isn't
      * present in this deployment) just means this one frame gets no source
-     * context, never a thrown error of its own.
+     * context, never a thrown error of its own. Never read at all under
+     * strict privacy, which never sends it.
      *
      * @param array<string, mixed> $frame
      * @return array<string, mixed>
      */
     private function attachSourceContext(array $frame): array
     {
-        if (!$this->configuration->captureSourceContext || !$frame['in_app']) {
+        if (!$this->configuration->captureSourceContext || !$frame['in_app'] || $this->configuration->strictPrivacy) {
             return $frame;
         }
 

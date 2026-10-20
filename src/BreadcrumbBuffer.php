@@ -44,7 +44,8 @@ final class BreadcrumbBuffer
         // via ForgeOpsTracker::init() (or a direct write to the Configuration object) takes effect
         // on whatever's added next, not just a buffer created afterward.
         $maxSize = max($this->configuration->maxBreadcrumbs, 0);
-        if ($maxSize === 0) {
+        // Strict privacy never sends breadcrumbs, so they're never recorded either.
+        if ($maxSize === 0 || $this->configuration->strictPrivacy) {
             return;
         }
 

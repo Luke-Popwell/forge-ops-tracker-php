@@ -36,6 +36,12 @@ class PerformanceFlusher
             return;
         }
 
+        // Under strict privacy a raw-path name (a request no route matched) loses its ids; a route
+        // is kept.
+        if ($this->configuration->strictPrivacy) {
+            $transactionName = (string) StrictPrivacy::transactionName($transactionName);
+        }
+
         $now = gmdate('Y-m-d\TH:i:s\Z');
         $this->pending[] = [
             'transaction_name' => $transactionName,

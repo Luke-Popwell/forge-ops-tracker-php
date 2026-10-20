@@ -270,6 +270,43 @@ To disable it:
 ForgeOpsTracker::init(dsn: '...', scrubPii: false);
 ```
 
+## Strict privacy
+
+For apps that can't let personal or health data (PII, PHI) leave their own servers. With strict
+privacy on, the client sends only structured facts about an error (its class, its stack frames'
+file, line and function, the release, environment, server, the request's `transaction_name` and
+trace id, and the database tables or procedures involved), never free text that could hold a
+name, an email or a diagnosis:
+
+- No error message. A `message_fingerprint` is sent instead: a one-way hash of the message with
+  its numbers, hex ids and UUIDs taken out, computed in your process, so errors still group
+  without the message ever leaving it.
+- No breadcrumbs (they aren't recorded at all), no `endpoint`, no SQL statement even with
+  `captureSqlStatement` on, and no source context (the source file is never read).
+- The user is sent by `id` only, never `email` or `username`.
+- Context and tags only keep the top-level keys you list in `privacyAllowedFields`, and only when
+  the value is a string, number or boolean. Nothing else from them is sent.
+- Spans: an outbound call is named by method and host only (`GET api.example.com`), a request no
+  route matched is named by its path with the ids taken out (`GET patients/:id`), and span data
+  keeps only the masked `db.statement` and `db.system`.
+- A request no route matched is named by its path with the ids taken out in error events and
+  performance samples too, not only in its spans. A route pattern is kept as it is.
+
+```php
+ForgeOpsTracker::init(
+    dsn: '...',
+    strictPrivacy: true,                             // default false
+    privacyAllowedFields: ['error_code', 'feature'], // default []
+);
+```
+
+Both can also come from the environment: `FORGE_OPS_STRICT_PRIVACY=true` and
+`FORGE_OPS_PRIVACY_ALLOWED_FIELDS=error_code,feature` (comma separated). A value passed to `init()`
+wins over the environment.
+
+ForgeOps applies the same rules again on arrival when the project's own Strict privacy setting is
+on, so an app with an older client, or one with this option off, still can't get that text stored.
+
 ## Session tracking (release health)
 
 By default, once the Laravel middleware or Symfony listener is registered, every request also

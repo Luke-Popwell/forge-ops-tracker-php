@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.10.0 (2026-10-20)
+
+- New `strictPrivacy` option (off by default, or `FORGE_OPS_STRICT_PRIVACY=true`) for apps that can't let personal or health data leave their servers. With it on, an error event carries no message (a `message_fingerprint` computed in your process is sent instead, so errors still group), no breadcrumbs, no `endpoint`, no SQL statement and no source context, and the user only by `id`. Outbound HTTP spans are named by method and host only, a request no route matched is named by its path with ids taken out, and span data keeps only `db.statement` and `db.system`. The same unmatched-route name has its ids taken out in error events and performance samples too.
+- New `privacyAllowedFields` option (or `FORGE_OPS_PRIVACY_ALLOWED_FIELDS=error_code,feature`): the context and tag keys strict privacy still sends, when their value is a string, number or boolean. Empty by default.
+
 ## 0.9.0 (2026-10-13)
 
 - Fixed: in a long-running process (a queue worker, a daemon), a batch of custom or infrastructure metrics the server refused was re-sent at every flush for as long as the process lived, with everything captured since added to it, and once 1000 entries had built up behind it every new metric was dropped too. A batch is now dropped when the server answers with a 4xx other than 408 or 429 (a 400, 401, 403, 413 or 422, for example), since sending it again can only fail the same way.

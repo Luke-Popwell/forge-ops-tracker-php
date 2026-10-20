@@ -158,6 +158,26 @@ final class Configuration
     /** Milliseconds a query has to take before explainSlowQueries considers it. */
     public float $explainThresholdMs = 500.0;
 
+    /**
+     * Off by default. On, nothing this client sends carries free text that could hold personal or
+     * health data: no error message (a message_fingerprint is sent instead, so errors still group),
+     * no breadcrumbs, no endpoint, no SQL statement, no source context, no user email or username,
+     * and outbound HTTP spans named by method and host only. See StrictPrivacy for every rule.
+     * FORGE_OPS_STRICT_PRIVACY=true turns it on from the environment; init() or setting it here
+     * wins over that.
+     */
+    public bool $strictPrivacy = false;
+
+    /**
+     * Context and tag keys strict privacy still sends (only plain string, int, float or bool values
+     * under exactly these top-level keys), e.g. ['error_code', 'feature']. Empty by default, so
+     * nothing from context or tags goes out. FORGE_OPS_PRIVACY_ALLOWED_FIELDS=error_code,feature
+     * sets it from the environment.
+     *
+     * @var string[]
+     */
+    public array $privacyAllowedFields = [];
+
     /** @var (callable(string): void)|null */
     public $logger = null;
 
@@ -168,6 +188,11 @@ final class Configuration
         $this->release = getenv('FORGE_OPS_RELEASE') ?: null;
         $this->serverName = gethostname() ?: null;
         $this->appRoot = getcwd() ?: '';
+        $this->strictPrivacy = in_array(strtolower(trim(self::env('FORGE_OPS_STRICT_PRIVACY') ?? '')), ['true', '1', 'yes', 'on'], true);
+        $this->privacyAllowedFields = array_values(array_filter(
+            array_map('trim', explode(',', self::env('FORGE_OPS_PRIVACY_ALLOWED_FIELDS') ?? '')),
+            static fn (string $field): bool => $field !== '',
+        ));
     }
 
     public function apiKey(): ?string

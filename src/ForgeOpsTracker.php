@@ -113,6 +113,8 @@ final class ForgeOpsTracker
         ?bool $trackEnvVarNames = null,
         ?bool $explainSlowQueries = null,
         ?float $explainThresholdMs = null,
+        ?bool $strictPrivacy = null,
+        ?array $privacyAllowedFields = null,
     ): Configuration {
         $configuration = self::configuration();
 
@@ -190,6 +192,12 @@ final class ForgeOpsTracker
         }
         if ($explainThresholdMs !== null) {
             $configuration->explainThresholdMs = $explainThresholdMs;
+        }
+        if ($strictPrivacy !== null) {
+            $configuration->strictPrivacy = $strictPrivacy;
+        }
+        if ($privacyAllowedFields !== null) {
+            $configuration->privacyAllowedFields = $privacyAllowedFields;
         }
 
         self::warnIfEnvironmentDisabled($configuration);
@@ -636,6 +644,12 @@ final class ForgeOpsTracker
         self::$trace = null;
         self::$request = null;
         $payload = $trace?->finishTrace($rootName, $startedAt, $durationMs, $errored);
+        // Under strict privacy every span goes through StrictPrivacy::span(): an outbound call named
+        // by its method and host only, a root span named by a raw path (a request no route matched)
+        // with its ids taken out, and no span data but the masked statement and db.system.
+        if ($payload !== null && self::configuration()->strictPrivacy) {
+            $payload['spans'] = array_map(StrictPrivacy::span(...), $payload['spans']);
+        }
         if ($payload !== null) {
             self::spanFlusher()->push($payload);
         }
