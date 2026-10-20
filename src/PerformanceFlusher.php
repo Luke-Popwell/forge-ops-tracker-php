@@ -36,8 +36,8 @@ class PerformanceFlusher
             return;
         }
 
-        // Under strict privacy a raw-path name (a request no route matched) loses its ids; a route
-        // is kept.
+        // Under strict privacy a raw-path name (a request no route matched) keeps only its first
+        // segment; a route is kept.
         if ($this->configuration->strictPrivacy) {
             $transactionName = (string) StrictPrivacy::transactionName($transactionName);
         }

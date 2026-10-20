@@ -89,24 +89,24 @@ final class StrictPrivacyTest extends TestCase
 
     /** @param array<string, string> $vector */
     #[DataProvider('pathVectors')]
-    public function testStripsIdsFromEveryPathVectorExactlyAsTheServerDoes(array $vector): void
+    public function testReducesEveryPathVectorExactlyAsTheServerDoes(array $vector): void
     {
-        self::assertSame($vector['strict'], StrictPrivacy::pathWithoutIds($vector['path']));
+        self::assertSame($vector['strict'], StrictPrivacy::strictPath($vector['path']));
     }
 
-    public function testTransactionNameKeepsARouteAndStripsIdsFromARawPath(): void
+    public function testTransactionNameKeepsARouteAndCutsARawPathDownToItsFirstSegment(): void
     {
         self::assertSame('GET patients/{id}', StrictPrivacy::transactionName('GET patients/{id}'));
-        self::assertSame('GET patients/:id', StrictPrivacy::transactionName('GET patients/8821'));
+        self::assertSame('GET patients/:path', StrictPrivacy::transactionName('GET patients/8821'));
         self::assertSame('PatientController::show', StrictPrivacy::transactionName('PatientController::show'));
         self::assertNull(StrictPrivacy::transactionName(null));
     }
 
-    public function testAnEventWithStrictPrivacyOnStripsIdsFromARawPathTransactionName(): void
+    public function testAnEventWithStrictPrivacyOnCutsDownARawPathTransactionName(): void
     {
         $payload = StrictPrivacy::event(['message' => 'boom', 'backtrace' => [], 'transaction_name' => 'GET patients/8821']);
 
-        self::assertSame('GET patients/:id', $payload['transaction_name']);
+        self::assertSame('GET patients/:path', $payload['transaction_name']);
     }
 
     /** @return iterable<string, array{bool}> */
@@ -117,7 +117,7 @@ final class StrictPrivacyTest extends TestCase
     }
 
     #[DataProvider('strictOnAndOff')]
-    public function testPerformanceSamplesStripIdsFromRawPathNamesOnlyWithStrictPrivacyOn(bool $strict): void
+    public function testPerformanceSamplesCutDownRawPathNamesOnlyWithStrictPrivacyOn(bool $strict): void
     {
         $config = new Configuration();
         $config->dsn = 'https://key@tracker.example.com/api/v1/events';
@@ -139,7 +139,7 @@ final class StrictPrivacyTest extends TestCase
 
         $names = array_column($delivered, 'transaction_name');
         sort($names);
-        self::assertSame($strict ? ['GET patients/:id', 'GET patients/{id}'] : ['GET patients/8821', 'GET patients/{id}'], $names);
+        self::assertSame($strict ? ['GET patients/:path', 'GET patients/{id}'] : ['GET patients/8821', 'GET patients/{id}'], $names);
     }
 
     public function testIsOffWithNoAllowedFieldsByDefault(): void
@@ -341,7 +341,7 @@ final class StrictPrivacyTest extends TestCase
         self::assertSame('GET api.example.com', $spans['http']['name']);
         self::assertArrayNotHasKey('data', $spans['http']);
         self::assertSame(['db.statement' => 'SELECT * FROM patients WHERE id = ?', 'db.system' => 'postgresql'], (array) $spans['database']['data']);
-        self::assertSame('GET patients/:id', $spans['controller']['name']);
+        self::assertSame('GET patients/:path', $spans['controller']['name']);
         self::assertArrayNotHasKey('data', $spans['controller']);
     }
 

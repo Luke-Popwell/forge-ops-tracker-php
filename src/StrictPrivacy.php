@@ -34,6 +34,7 @@ final class StrictPrivacy
     public const SPAN_DATA_KEYS = ['db.statement', 'db.system'];
     private const HTTP_METHOD = '/\A(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\s+(\S+)/i';
     private const SCHEME = '~\A[a-z][a-z0-9+.-]*://~i';
+    private const ROUTE_PARAMETER = '/\A(?::.+|\{.+\}|<.+>|\[.+\]|\*.*)\z/';
 
     /** Error event fields that are never sent, and the per-frame source context. */
     private const EVENT_FIELDS_DROPPED = ['message', 'breadcrumbs', 'endpoint', 'sql_statement'];
@@ -112,15 +113,15 @@ final class StrictPrivacy
 
     /**
      * "GET https://api.example.com/patients/42?x=1" or "GET api.example.com/patients/42" becomes
-     * "GET api.example.com". A bare path ("/patients/42"), a method and a path
-     * ("PUT /orders/17/items"), or a request named by its path ("GET patients/42", Laravel's own form
-     * for a request no route matched), has its ids taken out, like a page path. A name that's none
+     * "GET api.example.com". A bare path ("/patients/42"), a method and a path ("PUT
+     * /orders/17/items"), or a request named by its path ("GET patients/42", Laravel's own form for
+     * a request no route matched), goes through the path rule, like a page path. A name that's none
      * of these ("OrdersController#create", "patients#show") is kept.
      */
     public static function spanName(?string $name): ?string
     {
         if ($name !== null && str_starts_with($name, '/')) {
-            return self::pathWithoutIds($name);
+            return self::strictPath($name);
         }
         if ($name === null || preg_match(self::HTTP_METHOD, $name, $match) !== 1) {
             return $name;
@@ -129,15 +130,16 @@ final class StrictPrivacy
         $method = strtoupper($match[1]);
         $target = $match[2];
         if (str_starts_with($target, '/')) {
-            return $method . ' ' . self::pathWithoutIds($target);
+            return $method . ' ' . self::strictPath($target);
         }
 
-        return $method . ' ' . (self::host($target) ?? self::pathWithoutIds($target));
+        return $method . ' ' . (self::host($target) ?? self::strictPath($target));
     }
 
     /**
      * Which request something happened in: a route or a controller action is kept, but a raw path
-     * (what a request no route matched falls back to) has its ids stripped, by the span name rule.
+     * (what a request no route matched falls back to) keeps only its first segment, by the span
+     * name rule.
      */
     public static function transactionName(?string $name): ?string
     {
@@ -145,23 +147,42 @@ final class StrictPrivacy
     }
 
     /**
-     * A path with every segment that holds a digit, or is long enough to be a token or a name slug,
-     * replaced by ":id"; no query or fragment. "/patients/42/notes?q=x" is "/patients/:id/notes".
+     * A request or page path under strict privacy, with no query or fragment. A route template
+     * ("/patients/:id/notes", "/patients/{id}", "users/<int:id>/", "/files/*path", "/posts/[slug]")
+     * is kept as it is: its words are a developer's, and its parameters are already placeholders. A
+     * raw path keeps only its first segment, and the rest becomes ":path": "/patients/jane-doe/12"
+     * is "/patients/:path". Anything after the first segment of a raw path could name a person, and
+     * no rule can tell a name from a word ("/patients/janedoe"). A first segment that holds a digit
+     * or is over 40 characters is ":id" itself.
      */
-    public static function pathWithoutIds(?string $path): string
+    public static function strictPath(?string $path): string
     {
         $path = preg_split('/[?#]/', $path ?? '', 2)[0];
-        $segments = array_map(
-            static fn (string $segment): string => preg_match('/[0-9]/', $segment) === 1 || self::length($segment) > 40 ? ':id' : $segment,
-            explode('/', $path),
-        );
-        // Trailing empty segments are dropped, the same as Ruby's String#split the server uses.
-        while ($segments !== [] && end($segments) === '') {
-            array_pop($segments);
+        if (self::isRouteTemplate($path)) {
+            return $path;
         }
-        $joined = implode('/', $segments);
 
-        return $joined === '' ? '/' : $joined;
+        $leading = str_starts_with($path, '/') ? '/' : '';
+        $segments = array_values(array_filter(explode('/', $path), static fn (string $segment): bool => $segment !== ''));
+        if ($segments === []) {
+            return '/';
+        }
+
+        $first = preg_match('/[0-9]/', $segments[0]) === 1 || self::length($segments[0]) > 40 ? ':id' : $segments[0];
+
+        return $leading . $first . (count($segments) > 1 ? '/:path' : '');
+    }
+
+    // Whether any segment is a route parameter: ":id", "{id}", "<int:id>", "[slug]" or "*path".
+    private static function isRouteTemplate(string $path): bool
+    {
+        foreach (explode('/', $path) as $segment) {
+            if (preg_match(self::ROUTE_PARAMETER, $segment) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Characters, not bytes, like the server's String#length, without needing ext-mbstring; bytes

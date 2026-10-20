@@ -646,7 +646,7 @@ final class ForgeOpsTracker
         $payload = $trace?->finishTrace($rootName, $startedAt, $durationMs, $errored);
         // Under strict privacy every span goes through StrictPrivacy::span(): an outbound call named
         // by its method and host only, a root span named by a raw path (a request no route matched)
-        // with its ids taken out, and no span data but the masked statement and db.system.
+        // cut down to its first segment, and no span data but the masked statement and db.system.
         if ($payload !== null && self::configuration()->strictPrivacy) {
             $payload['spans'] = array_map(StrictPrivacy::span(...), $payload['spans']);
         }

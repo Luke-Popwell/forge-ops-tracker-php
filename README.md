@@ -287,10 +287,11 @@ name, an email or a diagnosis:
 - Context and tags only keep the top-level keys you list in `privacyAllowedFields`, and only when
   the value is a string, number or boolean. Nothing else from them is sent.
 - Spans: an outbound call is named by method and host only (`GET api.example.com`), a request no
-  route matched is named by its path with the ids taken out (`GET patients/:id`), and span data
-  keeps only the masked `db.statement` and `db.system`.
-- A request no route matched is named by its path with the ids taken out in error events and
-  performance samples too, not only in its spans. A route pattern is kept as it is.
+  route matched is named by the first segment of its path only (`GET patients/jane-doe/12` is
+  sent as `GET patients/:path`; a first segment with a digit becomes `:id`), and span data keeps
+  only the masked `db.statement` and `db.system`.
+- The same goes for that request's name in error events and performance samples. A route
+  pattern such as `patients/{id}` is kept as it is.
 
 ```php
 ForgeOpsTracker::init(

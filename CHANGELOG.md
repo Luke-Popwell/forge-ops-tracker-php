@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.0 (2026-10-20)
+
+- Strict privacy: a raw request path now keeps only its first segment, and the rest is sent as `:path` (`/patients/jane-doe/12` becomes `/patients/:path`; a first segment with a digit or over 40 characters becomes `:id`). Before, only segments holding a digit were replaced, so a path like `/patients/janedoe` went out whole. A route template (`/patients/:id/notes`, `{id}`, `<int:id>`, `[slug]`, `*path`) is kept as it is. This applies everywhere strict privacy names a request or a call by its path: span names and transaction names.
+
 ## 0.10.0 (2026-10-20)
 
 - New `strictPrivacy` option (off by default, or `FORGE_OPS_STRICT_PRIVACY=true`) for apps that can't let personal or health data leave their servers. With it on, an error event carries no message (a `message_fingerprint` computed in your process is sent instead, so errors still group), no breadcrumbs, no `endpoint`, no SQL statement and no source context, and the user only by `id`. Outbound HTTP spans are named by method and host only, a request no route matched is named by its path with ids taken out, and span data keeps only `db.statement` and `db.system`. The same unmatched-route name has its ids taken out in error events and performance samples too.
