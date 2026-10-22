@@ -5,6 +5,8 @@ Requires PHP 8.1+. Captures uncaught exceptions automatically through framework 
 Laravel and Symfony, or a plain exception-handler wrapper outside a framework, lets you report
 caught exceptions explicitly, and scrubs likely personal data before anything leaves the process.
 
+> For health or personal data, turn on [strict privacy](#strict-privacy): the SDK then sends only structured facts about each error (its type, stack trace, release and route), never the message, a raw path, breadcrumbs, or context you haven't allowed.
+
 ## Installation
 
 Registered on Packagist, but with no tagged release yet: install the `dev-main` branch (it tracks

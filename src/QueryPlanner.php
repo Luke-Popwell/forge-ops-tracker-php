@@ -58,7 +58,8 @@ class QueryPlanner
     {
         try {
             $configuration = $this->configuration;
-            if (!$configuration->explainSlowQueries || !$configuration->isEnabled()) {
+            // Strict privacy sends no SQL at all, masked or not (sdks/STRICT_PRIVACY.md).
+            if (!$configuration->explainSlowQueries || $configuration->strictPrivacy || !$configuration->isEnabled()) {
                 return false;
             }
             if ($dbSystem !== 'postgresql' || $durationMs < $configuration->explainThresholdMs) {

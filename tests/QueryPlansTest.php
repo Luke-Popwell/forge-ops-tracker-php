@@ -212,6 +212,17 @@ final class QueryPlansTest extends TestCase
         self::assertFalse($planner->consider('SELECT * FROM users', 'postgresql', 5000, static fn () => self::PLAN_JSON));
     }
 
+    public function testExplainDoesNothingUnderStrictPrivacy(): void
+    {
+        $delivered = [];
+        $config = $this->configuration();
+        $config->strictPrivacy = true;
+        $planner = $this->planner($config, $delivered);
+
+        self::assertFalse($planner->consider('SELECT * FROM users', 'postgresql', 5000, static fn () => self::PLAN_JSON));
+        self::assertSame([], $delivered);
+    }
+
     public function testExplainSkipsFastQueriesOtherDatabasesAndNonSelects(): void
     {
         $delivered = [];

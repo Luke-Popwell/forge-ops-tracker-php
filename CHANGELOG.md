@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.1 (2026-10-22)
+
+- Strict privacy now also turns off slow query plans (`explainSlowQueries`): no EXPLAIN is run and no
+  plan is sent, since a plan carries the SQL. Before, a plan could still be sent, with its values masked.
+- The README says what strict privacy does in its opening lines.
+
 ## 0.11.0 (2026-10-20)
 
 - Strict privacy: a raw request path now keeps only its first segment, and the rest is sent as `:path` (`/patients/jane-doe/12` becomes `/patients/:path`; a first segment with a digit or over 40 characters becomes `:id`). Before, only segments holding a digit were replaced, so a path like `/patients/janedoe` went out whole. A route template (`/patients/:id/notes`, `{id}`, `<int:id>`, `[slug]`, `*path`) is kept as it is. This applies everywhere strict privacy names a request or a call by its path: span names and transaction names.
