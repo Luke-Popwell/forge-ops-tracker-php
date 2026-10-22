@@ -26,6 +26,11 @@ final class StrictPrivacy
     // counts as a non-word character, exactly what the spec asks for, and a message that isn't
     // valid UTF-8 can't make a pattern fail.
     private const WORD = 'A-Za-z0-9_';
+    private const EMAIL = '/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/';
+    // A quoted value (KeyError: 'Jane Doe') is data, not the shape of the error. A single quote only
+    // opens or closes one where no ASCII word character touches it, so "Couldn't" never does.
+    private const DOUBLE_QUOTED = '/"[^"\r\n]*"/';
+    private const SINGLE_QUOTED = '/(?<![' . self::WORD . '])\'[^\'\r\n]*\'(?![' . self::WORD . '])/';
     private const HEX_OBJECT_ID = '/0x[0-9a-fA-F]{4,}/';
     private const UUID = '/(?<![' . self::WORD . '])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?![' . self::WORD . '])/';
     private const NUMBER = '/(?<![' . self::WORD . '])[0-9]+(?![' . self::WORD . '])/';
@@ -40,10 +45,16 @@ final class StrictPrivacy
     private const EVENT_FIELDS_DROPPED = ['message', 'breadcrumbs', 'endpoint', 'sql_statement'];
     private const SOURCE_CONTEXT_FIELDS = ['context_line', 'pre_context', 'post_context'];
 
-    /** The message with hex object ids, UUIDs and standalone numbers replaced, in that order. */
+    /**
+     * The message with emails, quoted values, hex object ids, UUIDs and standalone numbers replaced,
+     * in that order.
+     */
     public static function normalizeMessage(?string $message): string
     {
-        $message = preg_replace(self::HEX_OBJECT_ID, '0x', $message ?? '');
+        $message = preg_replace(self::EMAIL, '<email>', $message ?? '');
+        $message = preg_replace(self::DOUBLE_QUOTED, '<str>', $message);
+        $message = preg_replace(self::SINGLE_QUOTED, '<str>', $message);
+        $message = preg_replace(self::HEX_OBJECT_ID, '0x', $message);
         $message = preg_replace(self::UUID, '<uuid>', $message);
 
         return preg_replace(self::NUMBER, '<n>', $message);
