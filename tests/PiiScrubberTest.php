@@ -9,6 +9,36 @@ use PHPUnit\Framework\TestCase;
 
 final class PiiScrubberTest extends TestCase
 {
+    /**
+     * A byte-identical copy of sdks/pii_scrubbing_vectors.json, generated from the server's own
+     * PiiScrubber; every SDK checks itself against the same file.
+     *
+     * @return array<string, list<array<string, mixed>>>
+     */
+    private static function vectors(): array
+    {
+        return json_decode((string) file_get_contents(__DIR__ . '/fixtures/pii_scrubbing_vectors.json'), true, flags: JSON_THROW_ON_ERROR);
+    }
+
+    public function testScrubsEverySharedCardNumberAndIbanVectorExactlyAsTheServerDoes(): void
+    {
+        $strings = self::vectors()['strings'];
+        self::assertNotEmpty($strings);
+        foreach ($strings as $vector) {
+            self::assertSame($vector['scrubbed'], PiiScrubber::scrubString($vector['input']), $vector['input']);
+        }
+    }
+
+    public function testRedactsEverySharedBankDetailKeyVectorExactlyAsTheServerDoes(): void
+    {
+        $keys = self::vectors()['keys'];
+        self::assertNotEmpty($keys);
+        foreach ($keys as $vector) {
+            $expected = $vector['redacted'] ? PiiScrubber::REDACTED : 'x';
+            self::assertSame([$vector['key'] => $expected], PiiScrubber::scrub([$vector['key'] => 'x']), $vector['key']);
+        }
+    }
+
     public function testRedactsAnEmailAddressEmbeddedInFreeText(): void
     {
         self::assertSame(
