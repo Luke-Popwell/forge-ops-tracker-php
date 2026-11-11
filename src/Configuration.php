@@ -162,7 +162,8 @@ final class Configuration
      * Off by default. On, nothing this client sends carries free text that could hold personal or
      * health data: no error message (a message_fingerprint is sent instead, so errors still group),
      * no breadcrumbs, no endpoint, no SQL statement, no source context, no user email or username,
-     * and outbound HTTP spans named by method and host only. See StrictPrivacy for every rule.
+     * the user's id only as a keyed hash ($privacyUserKey), and outbound HTTP spans named by method
+     * and host only. See StrictPrivacy for every rule.
      * FORGE_OPS_STRICT_PRIVACY=true turns it on from the environment; init() or setting it here
      * wins over that.
      */
@@ -177,6 +178,14 @@ final class Configuration
      * @var string[]
      */
     public array $privacyAllowedFields = [];
+
+    /**
+     * Strict privacy sends the user's id only as a keyed hash (StrictPrivacy::hashedUserId) with
+     * this secret, which stays in your app; unset, no user is sent at all. Keep it the same across
+     * deploys and servers, or the same customer counts as two. FORGE_OPS_PRIVACY_USER_KEY sets it
+     * from the environment; an empty value counts as unset.
+     */
+    public ?string $privacyUserKey = null;
 
     /** @var (callable(string): void)|null */
     public $logger = null;
@@ -193,6 +202,7 @@ final class Configuration
             array_map('trim', explode(',', self::env('FORGE_OPS_PRIVACY_ALLOWED_FIELDS') ?? '')),
             static fn (string $field): bool => $field !== '',
         ));
+        $this->privacyUserKey = self::env('FORGE_OPS_PRIVACY_USER_KEY');
     }
 
     public function apiKey(): ?string

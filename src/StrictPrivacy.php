@@ -10,7 +10,8 @@ namespace ForgeOps\Tracker;
  * (the error's class, its stack frames, release, environment, server, which request it happened
  * in, timings and counts); free text, which is where a name, an email or a diagnosis hides, never
  * leaves this process: no error message, no breadcrumbs, no endpoint, no SQL statement, no source
- * context, no user email or username, and only the context/tag keys listed in
+ * context, no user email or username, the user's id only as a keyed hash
+ * (Configuration::$privacyUserKey), and only the context/tag keys listed in
  * Configuration::$privacyAllowedFields.
  *
  * The same rules as the server's own StrictPrivacy (app/services/strict_privacy.rb), which applies
@@ -80,7 +81,7 @@ final class StrictPrivacy
      * @param string[] $allowedFields
      * @return array<string, mixed>
      */
-    public static function event(array $payload, array $allowedFields = []): array
+    public static function event(array $payload, array $allowedFields = [], ?string $userKey = null): array
     {
         $reduced = array_diff_key($payload, array_flip(self::EVENT_FIELDS_DROPPED));
         $reduced['message'] = '';
@@ -90,7 +91,7 @@ final class StrictPrivacy
         }
         $reduced['context'] = self::allowed($payload['context'] ?? null, $allowedFields);
         $reduced['tags'] = self::allowed($payload['tags'] ?? null, $allowedFields);
-        $reduced['user'] = self::user($payload['user'] ?? null);
+        $reduced['user'] = self::user($payload['user'] ?? null, $userKey);
         $reduced['backtrace'] = array_map(
             static fn (array $frame): array => array_diff_key($frame, array_flip(self::SOURCE_CONTEXT_FIELDS)),
             $payload['backtrace'] ?? [],
@@ -249,17 +250,33 @@ final class StrictPrivacy
     }
 
     /**
-     * The user's id, as a string, and nothing else; null when there's no id.
+     * "h1:" and the first 32 lowercase hex characters of HMAC-SHA256 of the id's UTF-8 text, keyed
+     * with the app's own secret, which ForgeOps never sees. The same id hashes the same under one
+     * key, so affected customers can still be counted. PHP strings are already the bytes they
+     * hold, so UTF-8 text is hashed as its UTF-8 bytes.
+     */
+    public static function hashedUserId(string|int $id, string $key): string
+    {
+        return 'h1:' . substr(hash_hmac('sha256', (string) $id, $key), 0, self::FINGERPRINT_LENGTH);
+    }
+
+    /**
+     * Only a keyed hash of the user's id (hashedUserId), and only when the app set
+     * Configuration::$privacyUserKey; null otherwise. A raw id can be a record number that
+     * identifies a person, and an unkeyed hash of a small number can be guessed back.
      *
      * @return array{id: string}|null
      */
-    private static function user(mixed $user): ?array
+    private static function user(mixed $user, ?string $key = null): ?array
     {
+        if ($key === null || $key === '') {
+            return null;
+        }
         $id = is_array($user) ? ($user['id'] ?? null) : null;
-        if ($id === null || is_array($id) || trim((string) $id) === '') {
+        if ($id === null || is_array($id) || is_object($id) || trim((string) $id) === '') {
             return null;
         }
 
-        return ['id' => (string) $id];
+        return ['id' => self::hashedUserId((string) $id, $key)];
     }
 }

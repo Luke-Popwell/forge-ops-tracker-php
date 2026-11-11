@@ -115,6 +115,7 @@ final class ForgeOpsTracker
         ?float $explainThresholdMs = null,
         ?bool $strictPrivacy = null,
         ?array $privacyAllowedFields = null,
+        ?string $privacyUserKey = null,
     ): Configuration {
         $configuration = self::configuration();
 
@@ -198,6 +199,9 @@ final class ForgeOpsTracker
         }
         if ($privacyAllowedFields !== null) {
             $configuration->privacyAllowedFields = $privacyAllowedFields;
+        }
+        if ($privacyUserKey !== null) {
+            $configuration->privacyUserKey = $privacyUserKey;
         }
 
         self::warnIfEnvironmentDisabled($configuration);

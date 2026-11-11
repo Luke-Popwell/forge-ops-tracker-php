@@ -27,6 +27,7 @@ final class StrictPrivacyTest extends TestCase
         ForgeOpsTracker::resetForTesting();
         putenv('FORGE_OPS_STRICT_PRIVACY');
         putenv('FORGE_OPS_PRIVACY_ALLOWED_FIELDS');
+        putenv('FORGE_OPS_PRIVACY_USER_KEY');
         foreach ($this->tempFiles as $path) {
             @unlink($path);
         }
@@ -65,6 +66,26 @@ final class StrictPrivacyTest extends TestCase
         foreach (self::vectors()['path'] as $vector) {
             yield $vector['path'] === '' ? '(empty)' : $vector['path'] => [$vector];
         }
+    }
+
+    /** @return iterable<string, array{array<string, string>}> */
+    public static function userIdVectors(): iterable
+    {
+        foreach (self::vectors()['user_id'] as $index => $vector) {
+            yield "#{$index} " . json_encode($vector['id']) => [$vector];
+        }
+    }
+
+    /** @param array<string, string> $vector */
+    #[DataProvider('userIdVectors')]
+    public function testHashesEveryUserIdVectorExactlyAsTheServerDoes(array $vector): void
+    {
+        self::assertSame($vector['hashed'], StrictPrivacy::hashedUserId($vector['id'], $vector['key']));
+    }
+
+    public function testAnIntegerUserIdHashesAsItsText(): void
+    {
+        self::assertSame('h1:316d4a35bc95112698f59ef5aac5c29a', StrictPrivacy::hashedUserId(42, 'customer-secret'));
     }
 
     /** @param array<string, string> $vector */
@@ -148,6 +169,16 @@ final class StrictPrivacyTest extends TestCase
 
         self::assertFalse($config->strictPrivacy);
         self::assertSame([], $config->privacyAllowedFields);
+        self::assertNull($config->privacyUserKey);
+    }
+
+    public function testReadsTheUserKeyFromTheEnvironmentTreatingEmptyAsUnset(): void
+    {
+        putenv('FORGE_OPS_PRIVACY_USER_KEY=customer-secret');
+        self::assertSame('customer-secret', (new Configuration())->privacyUserKey);
+
+        putenv('FORGE_OPS_PRIVACY_USER_KEY=');
+        self::assertNull((new Configuration())->privacyUserKey);
     }
 
     public function testReadsBothOptionsFromTheEnvironment(): void
@@ -165,12 +196,14 @@ final class StrictPrivacyTest extends TestCase
     {
         putenv('FORGE_OPS_STRICT_PRIVACY=true');
         putenv('FORGE_OPS_PRIVACY_ALLOWED_FIELDS=error_code');
+        putenv('FORGE_OPS_PRIVACY_USER_KEY=from-env');
         ForgeOpsTracker::resetForTesting();
 
-        $config = ForgeOpsTracker::init(installExceptionHandler: false, strictPrivacy: false, privacyAllowedFields: ['feature']);
+        $config = ForgeOpsTracker::init(installExceptionHandler: false, strictPrivacy: false, privacyAllowedFields: ['feature'], privacyUserKey: 'from-code');
 
         self::assertFalse($config->strictPrivacy);
         self::assertSame(['feature'], $config->privacyAllowedFields);
+        self::assertSame('from-code', $config->privacyUserKey);
     }
 
     public function testAnythingButATrueLikeValueIsOff(): void
@@ -245,7 +278,7 @@ final class StrictPrivacyTest extends TestCase
             self::assertArrayNotHasKey($key, $payload);
         }
         self::assertSame(['error_code' => 'E42', 'tier' => 3], $payload['context']);
-        self::assertSame(['id' => '7'], $payload['user']);
+        self::assertArrayNotHasKey('user', $payload);
         $frame = $payload['backtrace'][0];
         self::assertSame($path, $frame['file']);
         self::assertSame(10, $frame['line']);
@@ -278,8 +311,41 @@ final class StrictPrivacyTest extends TestCase
         [$path, $error] = $this->throwFromSourceFile();
         $config = $this->eventConfiguration(dirname($path));
         $config->strictPrivacy = true;
+        $config->privacyUserKey = 'customer-secret';
 
         self::assertArrayNotHasKey('user', $this->build($config, $error, ['email' => 'jane@example.com']));
+        self::assertArrayNotHasKey('user', $this->build($config, $error, ['id' => '  ']));
+    }
+
+    public function testAnEventWithStrictPrivacyOnAndAUserKeySendsOnlyTheHashedId(): void
+    {
+        [$path, $error] = $this->throwFromSourceFile();
+        $config = $this->eventConfiguration(dirname($path));
+        $config->strictPrivacy = true;
+        $config->privacyUserKey = 'customer-secret';
+
+        $payload = $this->build($config, $error);
+
+        self::assertSame(['id' => StrictPrivacy::hashedUserId('7', 'customer-secret')], $payload['user']);
+        self::assertMatchesRegularExpression('/\Ah1:[0-9a-f]{32}\z/', $payload['user']['id']);
+    }
+
+    /** @return iterable<string, array{?string}> */
+    public static function missingUserKeys(): iterable
+    {
+        yield 'no key' => [null];
+        yield 'empty key' => [''];
+    }
+
+    #[DataProvider('missingUserKeys')]
+    public function testAnEventWithStrictPrivacyOnAndNoUserKeySendsNoUser(?string $key): void
+    {
+        [$path, $error] = $this->throwFromSourceFile();
+        $config = $this->eventConfiguration(dirname($path));
+        $config->strictPrivacy = true;
+        $config->privacyUserKey = $key;
+
+        self::assertArrayNotHasKey('user', $this->build($config, $error));
     }
 
     public function testAnEventWithStrictPrivacyOffIsExactlyAsBefore(): void

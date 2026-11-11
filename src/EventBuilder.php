@@ -50,7 +50,8 @@ class EventBuilder
      * message as it would otherwise have been sent, so after scrubPii, which is also what the server
      * fingerprints from a client without strict privacy, and keeps a message holding an email
      * grouping together), and breadcrumbs, endpoint, the SQL statement, source context, the user's
-     * email/username and every context/tag key not in $privacyAllowedFields are left out.
+     * email/username and every context/tag key not in $privacyAllowedFields are left out. The user's
+     * id is sent only as a keyed hash, and only when $privacyUserKey is set.
      */
     public function build(
         Throwable $throwable,
@@ -93,7 +94,7 @@ class EventBuilder
         $payload = $this->configuration->scrubPii ? $this->scrub($payload) : $payload;
 
         return $this->configuration->strictPrivacy
-            ? StrictPrivacy::event($payload, $this->configuration->privacyAllowedFields)
+            ? StrictPrivacy::event($payload, $this->configuration->privacyAllowedFields, $this->configuration->privacyUserKey)
             : $payload;
     }
 
